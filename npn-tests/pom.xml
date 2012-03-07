@@ -3,8 +3,8 @@
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
-        <groupId>org.mortbay.jetty</groupId>
-        <artifactId>jetty-npn-parent</artifactId>
+        <groupId>org.mortbay.jetty.npn</groupId>
+        <artifactId>npn-parent</artifactId>
         <version>7.6.2-SNAPSHOT</version>
     </parent>
 
