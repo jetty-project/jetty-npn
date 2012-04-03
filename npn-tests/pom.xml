@@ -3,7 +3,7 @@
     <parent>
         <groupId>org.mortbay.jetty.npn</groupId>
         <artifactId>npn-project</artifactId>
-        <version>1.0.0.v20120402</version>
+        <version>1.0.1-SNAPSHOT</version>
     </parent>
 
     <modelVersion>4.0.0</modelVersion>
