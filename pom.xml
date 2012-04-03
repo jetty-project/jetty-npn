@@ -80,20 +80,17 @@
             </plugin>
             <plugin>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>2.3.2</version>
                 <configuration>
                     <source>1.7</source>
                     <target>1.7</target>
                 </configuration>
             </plugin>
-<!--
             <plugin>
-                <artifactId>maven-pmd-plugin</artifactId>
+                <artifactId>maven-release-plugin</artifactId>
                 <configuration>
-                    <skip>true</skip>
+                    <autoVersionSubmodules>true</autoVersionSubmodules>
                 </configuration>
             </plugin>
--->
         </plugins>
     </build>
 
