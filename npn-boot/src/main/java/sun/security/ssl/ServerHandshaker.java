@@ -183,7 +183,7 @@ final class ServerHandshaker extends Handshaker {
         // In SSLv3 and TLS, messages follow strictly increasing
         // numerical order _except_ for one annoying special case.
         //
-        if ((state > type)
+        if ((state >= type)
                 && (state != HandshakeMessage.ht_client_key_exchange
                     && type != HandshakeMessage.ht_certificate_verify)) {
             throw new SSLProtocolException(
@@ -289,17 +289,19 @@ final class ServerHandshaker extends Handshaker {
         }
 
         //
-        // Move the state machine forward except for that annoying
-        // special case.  This means that clients could send extra
-        // cert verify messages; not a problem so long as all of
-        // them actually check out.
+        // Move state machine forward if the message handling
+        // code didn't already do so
         //
-        if (state < type && type != HandshakeMessage.ht_certificate_verify
-        // NPN_CHANGES_START
-                && type != NextProtocolMessage.ID
-        // NPN_CHANGES_END
-                ) {
-            state = type;
+        if (state < type) {
+            if(type == HandshakeMessage.ht_certificate_verify) {
+                state = type + 2;    // an annoying special case
+            // NPN_CHANGES_START
+            } else if (type == NextProtocolMessage.ID) {
+                // Do nothing
+            // NPN_CHANGES_END
+            } else {
+                state = type;
+            }
         }
     }
 
@@ -1446,7 +1448,7 @@ final class ServerHandshaker extends Handshaker {
         if (debug != null && Debug.isOn("handshake")) {
             mesg.print(System.out);
         }
-        return dh.getAgreedSecret(mesg.getClientPublicKey());
+        return dh.getAgreedSecret(mesg.getClientPublicKey(), false);
     }
 
     private SecretKey clientKeyExchange(ECDHClientKeyExchange mesg)
