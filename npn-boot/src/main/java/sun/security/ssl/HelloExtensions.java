@@ -316,6 +316,10 @@ final class ServerNameExtension extends HelloExtension {
     private List<ServerName> names;
     private int listLength;     // ServerNameList length
 
+    List<ServerName> getNames() {
+        return names;
+    }
+
     ServerNameExtension(List<String> hostnames) throws IOException {
         super(ExtensionType.EXT_SERVER_NAME);
 

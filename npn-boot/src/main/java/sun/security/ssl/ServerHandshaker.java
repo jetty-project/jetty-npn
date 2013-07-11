@@ -321,6 +321,8 @@ final class ServerHandshaker extends Handshaker {
             mesg.print(System.out);
         }
 
+        //Save the clientExtensions for later use by ClientExtensionsSupport (used for SNI)
+        engine.clientExtensions = mesg.extensions;
         // Does the message include security renegotiation indication?
         boolean renegotiationIndicated = false;
 
