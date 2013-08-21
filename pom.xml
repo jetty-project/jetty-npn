@@ -9,7 +9,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>fr.assoba.open</groupId>
     <artifactId>npn-project</artifactId>
-    <version>1.7_u17-HyenaPatch-SNAPSHOT</version>
+    <version>1.7_u25-HyenaPatch</version>
     <packaging>pom</packaging>
     <name>Jetty :: Next Protocol Negotiation :: Project</name>
 
