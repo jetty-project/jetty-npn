@@ -325,6 +325,11 @@ final public class SSLEngineImpl extends SSLEngine {
      */
     private static final Debug debug = Debug.getInstance("ssl");
 
+     /*
+     * Store the ClientHelloMessage Extensions for access by user code
+     */
+    HelloExtensions clientExtensions = null;
+
     //
     // Initialization/Constructors
     //

@@ -7,9 +7,9 @@
     </parent>
 
     <modelVersion>4.0.0</modelVersion>
-    <groupId>org.mortbay.jetty.npn</groupId>
+    <groupId>fr.assoba.open</groupId>
     <artifactId>npn-project</artifactId>
-    <version>1.1.6-SNAPSHOT</version>
+    <version>1.7_u25-HyenaPatch</version>
     <packaging>pom</packaging>
     <name>Jetty :: Next Protocol Negotiation :: Project</name>
 
@@ -44,9 +44,9 @@
     </licenses>
 
     <scm>
-        <connection>scm:git:git://github.com/jetty-project/jetty-npn.git</connection>
-        <developerConnection>scm:git:ssh://git@github.com/jetty-project/jetty-npn.git</developerConnection>
-        <url>https://github.com/jetty-project/jetty-npn</url>
+        <connection>scm:git:git://github.com/neuneu2k/jetty-npn.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/neuneu2k/jetty-npn.git</developerConnection>
+        <url>https://github.com/neuneu2k/jetty-npn</url>
     </scm>
 
     <properties>
@@ -83,12 +83,6 @@
                 <configuration>
                     <source>1.7</source>
                     <target>1.7</target>
-                </configuration>
-            </plugin>
-            <plugin>
-                <artifactId>maven-release-plugin</artifactId>
-                <configuration>
-                    <autoVersionSubmodules>true</autoVersionSubmodules>
                 </configuration>
             </plugin>
         </plugins>
