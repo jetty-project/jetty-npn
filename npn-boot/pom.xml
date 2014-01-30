@@ -5,7 +5,7 @@
 
     <groupId>fr.assoba.open</groupId>
     <artifactId>npn-boot</artifactId>
-    <version>1.7_u25</version>
+    <version>1.7_u45</version>
     <name>Jetty :: Next Protocol Negotiation :: Boot</name>
 
     <parent>
@@ -143,15 +143,6 @@
                         </configuration>
                     </execution>
                 </executions>
-            </plugin>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-jar-plugin</artifactId>
-                <configuration>
-                    <archive>
-                        <manifestFile>target/classes/META-INF/MANIFEST.MF</manifestFile>
-                    </archive>
-                </configuration>
             </plugin>
         </plugins>
     </build>
