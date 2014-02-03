@@ -1,158 +1,158 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
-    <modelVersion>4.0.0</modelVersion>
+  <modelVersion>4.0.0</modelVersion>
 
-    <groupId>fr.assoba.open</groupId>
-    <artifactId>npn-boot</artifactId>
-    <version>1.7_u45</version>
-    <name>Jetty :: Next Protocol Negotiation :: Boot</name>
+  <groupId>fr.assoba.open</groupId>
+  <artifactId>npn-boot</artifactId>
+  <version>1.8</version>
+  <name>Jetty :: Next Protocol Negotiation :: Boot</name>
 
-    <parent>
-        <groupId>org.sonatype.oss</groupId>
-        <artifactId>oss-parent</artifactId>
-        <version>7</version>
-    </parent>
+  <parent>
+    <groupId>org.sonatype.oss</groupId>
+    <artifactId>oss-parent</artifactId>
+    <version>7</version>
+  </parent>
 
-    <description>Fork of Jetty NPN Boot jar, with SNI hooks, original project found at
-        https://github.com/jetty-project/jetty-npn
-    </description>
+  <description>Fork of Jetty NPN Boot jar, with SNI hooks, original project found at
+    https://github.com/jetty-project/jetty-npn
+  </description>
 
+  <url>https://github.com/neuneu2k/jetty-npn</url>
+
+  <scm>
+    <connection>scm:git:ssh://github.com/neuneu2k/jetty-npn.git</connection>
+    <developerConnection>scm:git:ssh://github.com/neuneu2k/jetty-npn.git</developerConnection>
     <url>https://github.com/neuneu2k/jetty-npn</url>
+  </scm>
 
-    <scm>
-        <connection>scm:git:ssh://github.com/neuneu2k/jetty-npn.git</connection>
-        <developerConnection>scm:git:ssh://github.com/neuneu2k/jetty-npn.git</developerConnection>
-        <url>https://github.com/neuneu2k/jetty-npn</url>
-    </scm>
+  <issueManagement>
+    <url>https://github.com/neuneu2k/jetty-npn/issues</url>
+    <system>GitHub Issues</system>
+  </issueManagement>
 
-    <issueManagement>
-        <url>https://github.com/neuneu2k/jetty-npn/issues</url>
-        <system>GitHub Issues</system>
-    </issueManagement>
+  <licenses>
+    <license>
+      <name>GPL 2.0 With Classpath Exception</name>
+      <url>https://github.com/neuneu2k/jetty-npn/blob/master/LICENSE</url>
+      <distribution>repo</distribution>
+    </license>
+  </licenses>
 
-    <licenses>
-        <license>
-            <name>GPL 2.0 With Classpath Exception</name>
-            <url>https://github.com/neuneu2k/jetty-npn/blob/master/LICENSE</url>
-            <distribution>repo</distribution>
-        </license>
-    </licenses>
-
-    <developers>
-        <developer>
-            <id>neuneu2k</id>
-            <name>Josselin 'neuneu2k' Pujo</name>
-            <email>jpujo@assoba.fr</email>
-        </developer>
-    </developers>
+  <developers>
+    <developer>
+      <id>neuneu2k</id>
+      <name>Josselin 'neuneu2k' Pujo</name>
+      <email>jpujo@assoba.fr</email>
+    </developer>
+  </developers>
 
 
-    <build>
-        <plugins>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-gpg-plugin</artifactId>
-                <version>1.1</version>
-                <executions>
-                    <execution>
-                        <id>sign-artifacts</id>
-                        <phase>verify</phase>
-                        <goals>
-                            <goal>sign</goal>
-                        </goals>
-                    </execution>
-                </executions>
-            </plugin>
-            <plugin>
-                <artifactId>maven-source-plugin</artifactId>
-                <version>2.2</version>
-                <executions>
-                    <execution>
-                        <id>attach-sources</id>
-                        <phase>package</phase>
-                        <goals>
-                            <goal>jar-no-fork</goal>
-                        </goals>
-                    </execution>
-                </executions>
-            </plugin>
-            <plugin>
-                <artifactId>maven-javadoc-plugin</artifactId>
-                <version>2.8.1</version>
-                <executions>
-                    <execution>
-                        <id>attach-javadocs</id>
-                        <phase>package</phase>
-                        <goals>
-                            <goal>jar</goal>
-                        </goals>
-                    </execution>
-                </executions>
-                <configuration>
-                    <docfilessubdirs>true</docfilessubdirs>
-                </configuration>
-            </plugin>
-            <plugin>
-                <!-- explicitly define maven-deploy-plugin after other to force exec
-                    order -->
-                <artifactId>maven-deploy-plugin</artifactId>
-                <version>2.7</version>
-                <executions>
-                    <execution>
-                        <id>deploy</id>
-                        <phase>deploy</phase>
-                        <goals>
-                            <goal>deploy</goal>
-                        </goals>
-                    </execution>
-                </executions>
-            </plugin>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-compiler-plugin</artifactId>
-                <version>2.0.2</version>
-                <configuration>
-                    <source>1.7</source>
-                    <target>1.7</target>
-                </configuration>
-                <executions>
-                    <execution>
-                        <phase>compile</phase>
-                        <goals>
-                            <goal>compile</goal>
-                        </goals>
-                    </execution>
-                </executions>
-            </plugin>
-            <plugin>
-                <artifactId>maven-shade-plugin</artifactId>
-                <version>1.6</version>
-                <executions>
-                    <execution>
-                        <phase>package</phase>
-                        <goals>
-                            <goal>shade</goal>
-                        </goals>
-                        <configuration>
-                            <artifactSet>
-                                <includes>
-                                    <include>org.eclipse.jetty.npn:npn-api</include>
-                                </includes>
-                            </artifactSet>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
-        </plugins>
-    </build>
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-gpg-plugin</artifactId>
+        <version>1.1</version>
+        <executions>
+          <execution>
+            <id>sign-artifacts</id>
+            <phase>verify</phase>
+            <goals>
+              <goal>sign</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <artifactId>maven-source-plugin</artifactId>
+        <version>2.2</version>
+        <executions>
+          <execution>
+            <id>attach-sources</id>
+            <phase>package</phase>
+            <goals>
+              <goal>jar-no-fork</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <artifactId>maven-javadoc-plugin</artifactId>
+        <version>2.8.1</version>
+        <executions>
+          <execution>
+            <id>attach-javadocs</id>
+            <phase>package</phase>
+            <goals>
+              <goal>jar</goal>
+            </goals>
+          </execution>
+        </executions>
+        <configuration>
+          <docfilessubdirs>true</docfilessubdirs>
+        </configuration>
+      </plugin>
+      <plugin>
+        <!-- explicitly define maven-deploy-plugin after other to force exec
+            order -->
+        <artifactId>maven-deploy-plugin</artifactId>
+        <version>2.7</version>
+        <executions>
+          <execution>
+            <id>deploy</id>
+            <phase>deploy</phase>
+            <goals>
+              <goal>deploy</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>2.0.2</version>
+        <configuration>
+          <source>1.8</source>
+          <target>1.8</target>
+        </configuration>
+        <executions>
+          <execution>
+            <phase>compile</phase>
+            <goals>
+              <goal>compile</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>1.6</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <artifactSet>
+                <includes>
+                  <include>org.eclipse.jetty.npn:npn-api</include>
+                </includes>
+              </artifactSet>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
 
-    <dependencies>
-        <dependency>
-            <groupId>org.eclipse.jetty.npn</groupId>
-            <artifactId>npn-api</artifactId>
-            <version>1.1.0.v20120525</version>
-        </dependency>
-    </dependencies>
+  <dependencies>
+    <dependency>
+      <groupId>org.eclipse.jetty.npn</groupId>
+      <artifactId>npn-api</artifactId>
+      <version>1.1.0.v20120525</version>
+    </dependency>
+  </dependencies>
 
 </project>

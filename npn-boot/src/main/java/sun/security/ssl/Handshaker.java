@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2013, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,33 +26,8 @@
 
 package sun.security.ssl;
 
-import java.io.IOException;
-import java.security.AccessControlContext;
-import java.security.AccessController;
-import java.security.AlgorithmConstraints;
-import java.security.CryptoPrimitive;
-import java.security.GeneralSecurityException;
-import java.security.InvalidKeyException;
-import java.security.NoSuchAlgorithmException;
-import java.security.PrivilegedActionException;
-import java.security.PrivilegedExceptionAction;
-import java.security.ProviderException;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.EnumSet;
-import java.util.Set;
-import javax.crypto.KeyGenerator;
-import javax.crypto.SecretKey;
-import javax.crypto.spec.IvParameterSpec;
-import javax.net.ssl.SSLException;
-import javax.net.ssl.SSLHandshakeException;
-import javax.net.ssl.SSLKeyException;
-import javax.net.ssl.SSLPeerUnverifiedException;
-import javax.net.ssl.SSLProtocolException;
-
 import org.eclipse.jetty.npn.NextProtoNego;
 import sun.misc.HexDumpEncoder;
-import sun.security.internal.interfaces.TlsMasterSecret;
 import sun.security.internal.spec.TlsKeyMaterialParameterSpec;
 import sun.security.internal.spec.TlsKeyMaterialSpec;
 import sun.security.internal.spec.TlsMasterSecretParameterSpec;
@@ -62,12 +37,22 @@ import sun.security.ssl.CipherSuite.MacAlg;
 import sun.security.ssl.CipherSuite.PRF;
 import sun.security.ssl.HandshakeMessage.Finished;
 
+import javax.crypto.KeyGenerator;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.IvParameterSpec;
+import javax.net.ssl.*;
+import java.io.IOException;
+import java.security.*;
+import java.util.*;
+
+import static sun.security.ssl.CipherSuite.CipherType.AEAD_CIPHER;
+import static sun.security.ssl.CipherSuite.CipherType.BLOCK_CIPHER;
 import static sun.security.ssl.CipherSuite.PRF.P_NONE;
 
 /**
  * Handshaker ... processes handshake records from an SSL V3.0
  * data stream, handling all the details of the handshake protocol.
- *
+ * <p>
  * Note that the real protocol work is done in two subclasses, the  base
  * class just provides the control flow and key generation framework.
  *
@@ -75,791 +60,847 @@ import static sun.security.ssl.CipherSuite.PRF.P_NONE;
  */
 abstract class Handshaker {
 
-    // protocol version being established using this Handshaker
-    ProtocolVersion protocolVersion;
+  // protocol version being established using this Handshaker
+  ProtocolVersion protocolVersion;
 
-    // the currently active protocol version during a renegotiation
-    ProtocolVersion     activeProtocolVersion;
+  // the currently active protocol version during a renegotiation
+  ProtocolVersion activeProtocolVersion;
 
-    // security parameters for secure renegotiation.
-    boolean             secureRenegotiation;
-    byte[]              clientVerifyData;
-    byte[]              serverVerifyData;
+  // security parameters for secure renegotiation.
+  boolean secureRenegotiation;
+  byte[] clientVerifyData;
+  byte[] serverVerifyData;
 
-    // Is it an initial negotiation  or a renegotiation?
-    boolean                     isInitialHandshake;
+  // Is it an initial negotiation  or a renegotiation?
+  boolean isInitialHandshake;
 
-    // List of enabled protocols
-    private ProtocolList        enabledProtocols;
+  // List of enabled protocols
+  private ProtocolList enabledProtocols;
 
-    // List of enabled CipherSuites
-    private CipherSuiteList     enabledCipherSuites;
+  // List of enabled CipherSuites
+  private CipherSuiteList enabledCipherSuites;
 
-    // The endpoint identification protocol
-    String              identificationProtocol;
+  // The endpoint identification protocol
+  String identificationProtocol;
 
-    // The cryptographic algorithm constraints
-    private AlgorithmConstraints    algorithmConstraints = null;
+  // The cryptographic algorithm constraints
+  private AlgorithmConstraints algorithmConstraints = null;
 
-    // Local supported signature and algorithms
-    Collection<SignatureAndHashAlgorithm> localSupportedSignAlgs;
+  // Local supported signature and algorithms
+  Collection<SignatureAndHashAlgorithm> localSupportedSignAlgs;
 
-    // Peer supported signature and algorithms
-    Collection<SignatureAndHashAlgorithm> peerSupportedSignAlgs;
+  // Peer supported signature and algorithms
+  Collection<SignatureAndHashAlgorithm> peerSupportedSignAlgs;
 
-    /*
+  /*
 
-    /*
-     * List of active protocols
-     *
-     * Active protocols is a subset of enabled protocols, and will
-     * contain only those protocols that have vaild cipher suites
-     * enabled.
-     */
-    private ProtocolList       activeProtocols;
+  /*
+   * List of active protocols
+   *
+   * Active protocols is a subset of enabled protocols, and will
+   * contain only those protocols that have vaild cipher suites
+   * enabled.
+   */
+  private ProtocolList activeProtocols;
 
-    /*
-     * List of active cipher suites
-     *
-     * Active cipher suites is a subset of enabled cipher suites, and will
-     * contain only those cipher suites available for the active protocols.
-     */
-    private CipherSuiteList    activeCipherSuites;
+  /*
+   * List of active cipher suites
+   *
+   * Active cipher suites is a subset of enabled cipher suites, and will
+   * contain only those cipher suites available for the active protocols.
+   */
+  private CipherSuiteList activeCipherSuites;
 
-    private boolean             isClient;
-    private boolean             needCertVerify;
+  // The server name indication and matchers
+  List<SNIServerName> serverNames =
+      Collections.<SNIServerName>emptyList();
+  Collection<SNIMatcher> sniMatchers =
+      Collections.<SNIMatcher>emptyList();
 
-    SSLSocketImpl               conn = null;
-    SSLEngineImpl               engine = null;
+  private boolean isClient;
+  private boolean needCertVerify;
 
-    HandshakeHash               handshakeHash;
-    HandshakeInStream           input;
-    HandshakeOutStream          output;
-    int                         state;
-    SSLContextImpl              sslContext;
-    RandomCookie                clnt_random, svr_random;
-    SSLSessionImpl              session;
+  SSLSocketImpl conn = null;
+  SSLEngineImpl engine = null;
 
-    // current CipherSuite. Never null, initially SSL_NULL_WITH_NULL_NULL
-    CipherSuite         cipherSuite;
+  HandshakeHash handshakeHash;
+  HandshakeInStream input;
+  HandshakeOutStream output;
+  int state;
+  SSLContextImpl sslContext;
+  RandomCookie clnt_random, svr_random;
+  SSLSessionImpl session;
 
-    // current key exchange. Never null, initially K_NULL
-    KeyExchange         keyExchange;
+  // current CipherSuite. Never null, initially SSL_NULL_WITH_NULL_NULL
+  CipherSuite cipherSuite;
 
-    /* True if this session is being resumed (fast handshake) */
-    boolean             resumingSession;
+  // current key exchange. Never null, initially K_NULL
+  KeyExchange keyExchange;
 
-    /* True if it's OK to start a new SSL session */
-    boolean             enableNewSession;
+  /* True if this session is being resumed (fast handshake) */
+  boolean resumingSession;
 
-    // Temporary storage for the individual keys. Set by
-    // calculateConnectionKeys() and cleared once the ciphers are
-    // activated.
-    private SecretKey clntWriteKey, svrWriteKey;
-    private IvParameterSpec clntWriteIV, svrWriteIV;
-    private SecretKey clntMacSecret, svrMacSecret;
+  /* True if it's OK to start a new SSL session */
+  boolean enableNewSession;
 
-    /*
-     * Delegated task subsystem data structures.
-     *
-     * If thrown is set, we need to propagate this back immediately
-     * on entry into processMessage().
-     *
-     * Data is protected by the SSLEngine.this lock.
-     */
-    private volatile boolean taskDelegated = false;
-    private volatile DelegatedTask delegatedTask = null;
-    private volatile Exception thrown = null;
+  // Whether local cipher suites preference should be honored during
+  // handshaking?
+  //
+  // Note that in this provider, this option only applies to server side.
+  // Local cipher suites preference is always honored in client side in
+  // this provider.
+  boolean preferLocalCipherSuites = false;
 
-    // Could probably use a java.util.concurrent.atomic.AtomicReference
-    // here instead of using this lock.  Consider changing.
-    private Object thrownLock = new Object();
+  // Temporary storage for the individual keys. Set by
+  // calculateConnectionKeys() and cleared once the ciphers are
+  // activated.
+  private SecretKey clntWriteKey, svrWriteKey;
+  private IvParameterSpec clntWriteIV, svrWriteIV;
+  private SecretKey clntMacSecret, svrMacSecret;
 
-    /* Class and subclass dynamic debugging support */
-    static final Debug debug = Debug.getInstance("ssl");
+  /*
+   * Delegated task subsystem data structures.
+   *
+   * If thrown is set, we need to propagate this back immediately
+   * on entry into processMessage().
+   *
+   * Data is protected by the SSLEngine.this lock.
+   */
+  private volatile boolean taskDelegated = false;
+  private volatile DelegatedTask<?> delegatedTask = null;
+  private volatile Exception thrown = null;
 
-    // By default, disable the unsafe legacy session renegotiation
-    static final boolean allowUnsafeRenegotiation = Debug.getBooleanProperty(
-                    "sun.security.ssl.allowUnsafeRenegotiation", false);
+  // Could probably use a java.util.concurrent.atomic.AtomicReference
+  // here instead of using this lock.  Consider changing.
+  private Object thrownLock = new Object();
 
-    // For maximum interoperability and backward compatibility, RFC 5746
-    // allows server (or client) to accept ClientHello (or ServerHello)
-    // message without the secure renegotiation_info extension or SCSV.
+  /* Class and subclass dynamic debugging support */
+  static final Debug debug = Debug.getInstance("ssl");
+
+  // By default, disable the unsafe legacy session renegotiation
+  static final boolean allowUnsafeRenegotiation = Debug.getBooleanProperty(
+      "sun.security.ssl.allowUnsafeRenegotiation", false);
+
+  // For maximum interoperability and backward compatibility, RFC 5746
+  // allows server (or client) to accept ClientHello (or ServerHello)
+  // message without the secure renegotiation_info extension or SCSV.
+  //
+  // For maximum security, RFC 5746 also allows server (or client) to
+  // reject such message with a fatal "handshake_failure" alert.
+  //
+  // By default, allow such legacy hello messages.
+  static final boolean allowLegacyHelloMessages = Debug.getBooleanProperty(
+      "sun.security.ssl.allowLegacyHelloMessages", true);
+
+  // To prevent the TLS renegotiation issues, by setting system property
+  // "jdk.tls.rejectClientInitiatedRenegotiation" to true, applications in
+  // server side can disable all client initiated SSL renegotiations
+  // regardless of the support of TLS protocols.
+  //
+  // By default, allow client initiated renegotiations.
+  static final boolean rejectClientInitiatedRenego =
+      Debug.getBooleanProperty(
+          "jdk.tls.rejectClientInitiatedRenegotiation", false);
+
+  // need to dispose the object when it is invalidated
+  boolean invalidated;
+
+  Handshaker(SSLSocketImpl c, SSLContextImpl context,
+             ProtocolList enabledProtocols, boolean needCertVerify,
+             boolean isClient, ProtocolVersion activeProtocolVersion,
+             boolean isInitialHandshake, boolean secureRenegotiation,
+             byte[] clientVerifyData, byte[] serverVerifyData) {
+    this.conn = c;
+    init(context, enabledProtocols, needCertVerify, isClient,
+        activeProtocolVersion, isInitialHandshake, secureRenegotiation,
+        clientVerifyData, serverVerifyData);
+  }
+
+  Handshaker(SSLEngineImpl engine, SSLContextImpl context,
+             ProtocolList enabledProtocols, boolean needCertVerify,
+             boolean isClient, ProtocolVersion activeProtocolVersion,
+             boolean isInitialHandshake, boolean secureRenegotiation,
+             byte[] clientVerifyData, byte[] serverVerifyData) {
+    this.engine = engine;
+    init(context, enabledProtocols, needCertVerify, isClient,
+        activeProtocolVersion, isInitialHandshake, secureRenegotiation,
+        clientVerifyData, serverVerifyData);
+  }
+
+  private void init(SSLContextImpl context, ProtocolList enabledProtocols,
+                    boolean needCertVerify, boolean isClient,
+                    ProtocolVersion activeProtocolVersion,
+                    boolean isInitialHandshake, boolean secureRenegotiation,
+                    byte[] clientVerifyData, byte[] serverVerifyData) {
+
+    if (debug != null && Debug.isOn("handshake")) {
+      System.out.println(
+          "Allow unsafe renegotiation: " + allowUnsafeRenegotiation +
+              "\nAllow legacy hello messages: " + allowLegacyHelloMessages +
+              "\nIs initial handshake: " + isInitialHandshake +
+              "\nIs secure renegotiation: " + secureRenegotiation);
+    }
+
+    this.sslContext = context;
+    this.isClient = isClient;
+    this.needCertVerify = needCertVerify;
+    this.activeProtocolVersion = activeProtocolVersion;
+    this.isInitialHandshake = isInitialHandshake;
+    this.secureRenegotiation = secureRenegotiation;
+    this.clientVerifyData = clientVerifyData;
+    this.serverVerifyData = serverVerifyData;
+    enableNewSession = true;
+    invalidated = false;
+
+    setCipherSuite(CipherSuite.C_NULL);
+    setEnabledProtocols(enabledProtocols);
+
+    if (conn != null) {
+      algorithmConstraints = new SSLAlgorithmConstraints(conn, true);
+    } else {        // engine != null
+      algorithmConstraints = new SSLAlgorithmConstraints(engine, true);
+    }
+
+
     //
-    // For maximum security, RFC 5746 also allows server (or client) to
-    // reject such message with a fatal "handshake_failure" alert.
+    // In addition to the connection state machine, controlling
+    // how the connection deals with the different sorts of records
+    // that get sent (notably handshake transitions!), there's
+    // also a handshaking state machine that controls message
+    // sequencing.
     //
-    // By default, allow such legacy hello messages.
-    static final boolean allowLegacyHelloMessages = Debug.getBooleanProperty(
-                    "sun.security.ssl.allowLegacyHelloMessages", true);
+    // It's a convenient artifact of the protocol that this can,
+    // with only a couple of minor exceptions, be driven by the
+    // type constant for the last message seen:  except for the
+    // client's cert verify, those constants are in a convenient
+    // order to drastically simplify state machine checking.
+    //
+    state = -2;  // initialized but not activated
+  }
 
-    // need to dispose the object when it is invalidated
-    boolean invalidated;
+  /*
+   * Reroutes calls to the SSLSocket or SSLEngine (*SE).
+   *
+   * We could have also done it by extra classes
+   * and letting them override, but this seemed much
+   * less involved.
+   */
+  void fatalSE(byte b, String diagnostic) throws IOException {
+    fatalSE(b, diagnostic, null);
+  }
 
-    Handshaker(SSLSocketImpl c, SSLContextImpl context,
-            ProtocolList enabledProtocols, boolean needCertVerify,
-            boolean isClient, ProtocolVersion activeProtocolVersion,
-            boolean isInitialHandshake, boolean secureRenegotiation,
-            byte[] clientVerifyData, byte[] serverVerifyData) {
-        this.conn = c;
-        init(context, enabledProtocols, needCertVerify, isClient,
-            activeProtocolVersion, isInitialHandshake, secureRenegotiation,
-            clientVerifyData, serverVerifyData);
+  void fatalSE(byte b, Throwable cause) throws IOException {
+    fatalSE(b, null, cause);
+  }
+
+  void fatalSE(byte b, String diagnostic, Throwable cause)
+      throws IOException {
+    if (conn != null) {
+      conn.fatal(b, diagnostic, cause);
+    } else {
+      engine.fatal(b, diagnostic, cause);
     }
+  }
 
-    Handshaker(SSLEngineImpl engine, SSLContextImpl context,
-            ProtocolList enabledProtocols, boolean needCertVerify,
-            boolean isClient, ProtocolVersion activeProtocolVersion,
-            boolean isInitialHandshake, boolean secureRenegotiation,
-            byte[] clientVerifyData, byte[] serverVerifyData) {
-        this.engine = engine;
-        init(context, enabledProtocols, needCertVerify, isClient,
-            activeProtocolVersion, isInitialHandshake, secureRenegotiation,
-            clientVerifyData, serverVerifyData);
+  void warningSE(byte b) {
+    if (conn != null) {
+      conn.warning(b);
+    } else {
+      engine.warning(b);
     }
+  }
 
-    private void init(SSLContextImpl context, ProtocolList enabledProtocols,
-            boolean needCertVerify, boolean isClient,
-            ProtocolVersion activeProtocolVersion,
-            boolean isInitialHandshake, boolean secureRenegotiation,
-            byte[] clientVerifyData, byte[] serverVerifyData) {
-
-        if (debug != null && Debug.isOn("handshake")) {
-            System.out.println(
-                "Allow unsafe renegotiation: " + allowUnsafeRenegotiation +
-                "\nAllow legacy hello messages: " + allowLegacyHelloMessages +
-                "\nIs initial handshake: " + isInitialHandshake +
-                "\nIs secure renegotiation: " + secureRenegotiation);
-        }
-
-        this.sslContext = context;
-        this.isClient = isClient;
-        this.needCertVerify = needCertVerify;
-        this.activeProtocolVersion = activeProtocolVersion;
-        this.isInitialHandshake = isInitialHandshake;
-        this.secureRenegotiation = secureRenegotiation;
-        this.clientVerifyData = clientVerifyData;
-        this.serverVerifyData = serverVerifyData;
-        enableNewSession = true;
-        invalidated = false;
-
-        setCipherSuite(CipherSuite.C_NULL);
-        setEnabledProtocols(enabledProtocols);
-
-        if (conn != null) {
-            algorithmConstraints = new SSLAlgorithmConstraints(conn, true);
-        } else {        // engine != null
-            algorithmConstraints = new SSLAlgorithmConstraints(engine, true);
-        }
-
-
-        //
-        // In addition to the connection state machine, controlling
-        // how the connection deals with the different sorts of records
-        // that get sent (notably handshake transitions!), there's
-        // also a handshaking state machine that controls message
-        // sequencing.
-        //
-        // It's a convenient artifact of the protocol that this can,
-        // with only a couple of minor exceptions, be driven by the
-        // type constant for the last message seen:  except for the
-        // client's cert verify, those constants are in a convenient
-        // order to drastically simplify state machine checking.
-        //
-        state = -2;  // initialized but not activated
+  // ONLY used by ClientHandshaker to setup the peer host in SSLSession.
+  String getHostSE() {
+    if (conn != null) {
+      return conn.getHost();
+    } else {
+      return engine.getPeerHost();
     }
+  }
 
-    /*
-     * Reroutes calls to the SSLSocket or SSLEngine (*SE).
-     *
-     * We could have also done it by extra classes
-     * and letting them override, but this seemed much
-     * less involved.
-     */
-    void fatalSE(byte b, String diagnostic) throws IOException {
-        fatalSE(b, diagnostic, null);
-    }
-
-    void fatalSE(byte b, Throwable cause) throws IOException {
-        fatalSE(b, null, cause);
-    }
-
-    void fatalSE(byte b, String diagnostic, Throwable cause)
-            throws IOException {
-        if (conn != null) {
-            conn.fatal(b, diagnostic, cause);
-        } else {
-            engine.fatal(b, diagnostic, cause);
-        }
-    }
-
-    void warningSE(byte b) {
-        if (conn != null) {
-            conn.warning(b);
-        } else {
-            engine.warning(b);
-        }
-    }
-
-    String getRawHostnameSE() {
-        if (conn != null) {
-            return conn.getRawHostname();
-        } else {
-            return engine.getPeerHost();
-        }
-    }
-
-    String getHostSE() {
-        if (conn != null) {
-            return conn.getHost();
-        } else {
-            return engine.getPeerHost();
-        }
-    }
-
-    String getHostAddressSE() {
-        if (conn != null) {
-            return conn.getInetAddress().getHostAddress();
-        } else {
+  // ONLY used by ServerHandshaker to setup the peer host in SSLSession.
+  String getHostAddressSE() {
+    if (conn != null) {
+      return conn.getInetAddress().getHostAddress();
+    } else {
             /*
              * This is for caching only, doesn't matter that's is really
              * a hostname.  The main thing is that it doesn't do
              * a reverse DNS lookup, potentially slowing things down.
              */
-            return engine.getPeerHost();
-        }
+      return engine.getPeerHost();
+    }
+  }
+
+  int getPortSE() {
+    if (conn != null) {
+      return conn.getPort();
+    } else {
+      return engine.getPeerPort();
+    }
+  }
+
+  int getLocalPortSE() {
+    if (conn != null) {
+      return conn.getLocalPort();
+    } else {
+      return -1;
+    }
+  }
+
+  AccessControlContext getAccSE() {
+    if (conn != null) {
+      return conn.getAcc();
+    } else {
+      return engine.getAcc();
+    }
+  }
+
+  private void setVersionSE(ProtocolVersion protocolVersion) {
+    if (conn != null) {
+      conn.setVersion(protocolVersion);
+    } else {
+      engine.setVersion(protocolVersion);
+    }
+  }
+
+  /**
+   * Set the active protocol version and propagate it to the SSLSocket
+   * and our handshake streams. Called from ClientHandshaker
+   * and ServerHandshaker with the negotiated protocol version.
+   */
+  void setVersion(ProtocolVersion protocolVersion) {
+    this.protocolVersion = protocolVersion;
+    setVersionSE(protocolVersion);
+
+    output.r.setVersion(protocolVersion);
+  }
+
+  /**
+   * Set the enabled protocols. Called from the constructor or
+   * SSLSocketImpl/SSLEngineImpl.setEnabledProtocols() (if the
+   * handshake is not yet in progress).
+   */
+  void setEnabledProtocols(ProtocolList enabledProtocols) {
+    activeCipherSuites = null;
+    activeProtocols = null;
+
+    this.enabledProtocols = enabledProtocols;
+  }
+
+  /**
+   * Set the enabled cipher suites. Called from
+   * SSLSocketImpl/SSLEngineImpl.setEnabledCipherSuites() (if the
+   * handshake is not yet in progress).
+   */
+  void setEnabledCipherSuites(CipherSuiteList enabledCipherSuites) {
+    activeCipherSuites = null;
+    activeProtocols = null;
+    this.enabledCipherSuites = enabledCipherSuites;
+  }
+
+  /**
+   * Set the algorithm constraints. Called from the constructor or
+   * SSLSocketImpl/SSLEngineImpl.setAlgorithmConstraints() (if the
+   * handshake is not yet in progress).
+   */
+  void setAlgorithmConstraints(AlgorithmConstraints algorithmConstraints) {
+    activeCipherSuites = null;
+    activeProtocols = null;
+
+    this.algorithmConstraints =
+        new SSLAlgorithmConstraints(algorithmConstraints);
+    this.localSupportedSignAlgs = null;
+  }
+
+  Collection<SignatureAndHashAlgorithm> getLocalSupportedSignAlgs() {
+    if (localSupportedSignAlgs == null) {
+      localSupportedSignAlgs =
+          SignatureAndHashAlgorithm.getSupportedAlgorithms(
+              algorithmConstraints);
     }
 
-    boolean isLoopbackSE() {
-        if (conn != null) {
-            return conn.getInetAddress().isLoopbackAddress();
-        } else {
-            return false;
-        }
+    return localSupportedSignAlgs;
+  }
+
+  void setPeerSupportedSignAlgs(
+      Collection<SignatureAndHashAlgorithm> algorithms) {
+    peerSupportedSignAlgs =
+        new ArrayList<SignatureAndHashAlgorithm>(algorithms);
+  }
+
+  Collection<SignatureAndHashAlgorithm> getPeerSupportedSignAlgs() {
+    return peerSupportedSignAlgs;
+  }
+
+
+  /**
+   * Set the identification protocol. Called from the constructor or
+   * SSLSocketImpl/SSLEngineImpl.setIdentificationProtocol() (if the
+   * handshake is not yet in progress).
+   */
+  void setIdentificationProtocol(String protocol) {
+    this.identificationProtocol = protocol;
+  }
+
+  /**
+   * Sets the server name indication of the handshake.
+   */
+  void setSNIServerNames(List<SNIServerName> serverNames) {
+    // The serverNames parameter is unmodifiable.
+    this.serverNames = serverNames;
+  }
+
+  /**
+   * Sets the server name matchers of the handshaking.
+   */
+  void setSNIMatchers(Collection<SNIMatcher> sniMatchers) {
+    // The sniMatchers parameter is unmodifiable.
+    this.sniMatchers = sniMatchers;
+  }
+
+  /**
+   * Sets the cipher suites preference.
+   */
+  void setUseCipherSuitesOrder(boolean on) {
+    this.preferLocalCipherSuites = on;
+  }
+
+  /**
+   * Prior to handshaking, activate the handshake and initialize the version,
+   * input stream and output stream.
+   */
+  void activate(ProtocolVersion helloVersion) throws IOException {
+    if (activeProtocols == null) {
+      activeProtocols = getActiveProtocols();
     }
 
-    int getPortSE() {
-        if (conn != null) {
-            return conn.getPort();
-        } else {
-            return engine.getPeerPort();
-        }
+    if (activeProtocols.collection().isEmpty() ||
+        activeProtocols.max.v == ProtocolVersion.NONE.v) {
+      throw new SSLHandshakeException("No appropriate protocol");
     }
 
-    int getLocalPortSE() {
-        if (conn != null) {
-            return conn.getLocalPort();
-        } else {
-            return -1;
-        }
+    if (activeCipherSuites == null) {
+      activeCipherSuites = getActiveCipherSuites();
     }
 
-    AccessControlContext getAccSE() {
-        if (conn != null) {
-            return conn.getAcc();
-        } else {
-            return engine.getAcc();
-        }
+    if (activeCipherSuites.collection().isEmpty()) {
+      throw new SSLHandshakeException("No appropriate cipher suite");
     }
 
-    private void setVersionSE(ProtocolVersion protocolVersion) {
-        if (conn != null) {
-            conn.setVersion(protocolVersion);
-        } else {
-            engine.setVersion(protocolVersion);
-        }
+    // temporary protocol version until the actual protocol version
+    // is negotiated in the Hello exchange. This affects the record
+    // version we sent with the ClientHello.
+    if (!isInitialHandshake) {
+      protocolVersion = activeProtocolVersion;
+    } else {
+      protocolVersion = activeProtocols.max;
     }
 
-    /**
-     * Set the active protocol version and propagate it to the SSLSocket
-     * and our handshake streams. Called from ClientHandshaker
-     * and ServerHandshaker with the negotiated protocol version.
-     */
-    void setVersion(ProtocolVersion protocolVersion) {
-        this.protocolVersion = protocolVersion;
-        setVersionSE(protocolVersion);
-
-        output.r.setVersion(protocolVersion);
+    if (helloVersion == null || helloVersion.v == ProtocolVersion.NONE.v) {
+      helloVersion = activeProtocols.helloVersion;
     }
 
-    /**
-     * Set the enabled protocols. Called from the constructor or
-     * SSLSocketImpl/SSLEngineImpl.setEnabledProtocols() (if the
-     * handshake is not yet in progress).
-     */
-    void setEnabledProtocols(ProtocolList enabledProtocols) {
-        activeCipherSuites = null;
-        activeProtocols = null;
+    // We accumulate digests of the handshake messages so that
+    // we can read/write CertificateVerify and Finished messages,
+    // getting assurance against some particular active attacks.
+    handshakeHash = new HandshakeHash(needCertVerify);
 
-        this.enabledProtocols = enabledProtocols;
+    // Generate handshake input/output stream.
+    input = new HandshakeInStream(handshakeHash);
+    if (conn != null) {
+      output = new HandshakeOutStream(protocolVersion, helloVersion,
+          handshakeHash, conn);
+      conn.getAppInputStream().r.setHandshakeHash(handshakeHash);
+      conn.getAppInputStream().r.setHelloVersion(helloVersion);
+      conn.getAppOutputStream().r.setHelloVersion(helloVersion);
+    } else {
+      output = new HandshakeOutStream(protocolVersion, helloVersion,
+          handshakeHash, engine);
+      engine.inputRecord.setHandshakeHash(handshakeHash);
+      engine.inputRecord.setHelloVersion(helloVersion);
+      engine.outputRecord.setHelloVersion(helloVersion);
     }
 
-    /**
-     * Set the enabled cipher suites. Called from
-     * SSLSocketImpl/SSLEngineImpl.setEnabledCipherSuites() (if the
-     * handshake is not yet in progress).
-     */
-    void setEnabledCipherSuites(CipherSuiteList enabledCipherSuites) {
-        activeCipherSuites = null;
-        activeProtocols = null;
-        this.enabledCipherSuites = enabledCipherSuites;
+    // move state to activated
+    state = -1;
+  }
+
+  /**
+   * Set cipherSuite and keyExchange to the given CipherSuite.
+   * Does not perform any verification that this is a valid selection,
+   * this must be done before calling this method.
+   */
+  void setCipherSuite(CipherSuite s) {
+    this.cipherSuite = s;
+    this.keyExchange = s.keyExchange;
+  }
+
+  /**
+   * Check if the given ciphersuite is enabled and available within the
+   * current active cipher suites.
+   * <p>
+   * Does not check if the required server certificates are available.
+   */
+  boolean isNegotiable(CipherSuite s) {
+    if (activeCipherSuites == null) {
+      activeCipherSuites = getActiveCipherSuites();
     }
 
-    /**
-     * Set the algorithm constraints. Called from the constructor or
-     * SSLSocketImpl/SSLEngineImpl.setAlgorithmConstraints() (if the
-     * handshake is not yet in progress).
-     */
-    void setAlgorithmConstraints(AlgorithmConstraints algorithmConstraints) {
-        activeCipherSuites = null;
-        activeProtocols = null;
+    return isNegotiable(activeCipherSuites, s);
+  }
 
-        this.algorithmConstraints =
-            new SSLAlgorithmConstraints(algorithmConstraints);
-        this.localSupportedSignAlgs = null;
+  /**
+   * Check if the given ciphersuite is enabled and available within the
+   * proposed cipher suite list.
+   * <p>
+   * Does not check if the required server certificates are available.
+   */
+  final static boolean isNegotiable(CipherSuiteList proposed, CipherSuite s) {
+    return proposed.contains(s) && s.isNegotiable();
+  }
+
+  /**
+   * Check if the given protocol version is enabled and available.
+   */
+  boolean isNegotiable(ProtocolVersion protocolVersion) {
+    if (activeProtocols == null) {
+      activeProtocols = getActiveProtocols();
     }
 
-    Collection<SignatureAndHashAlgorithm> getLocalSupportedSignAlgs() {
-        if (localSupportedSignAlgs == null) {
-            localSupportedSignAlgs =
-                SignatureAndHashAlgorithm.getSupportedAlgorithms(
-                                                    algorithmConstraints);
-        }
+    return activeProtocols.contains(protocolVersion);
+  }
 
-        return localSupportedSignAlgs;
+  /**
+   * Select a protocol version from the list. Called from
+   * ServerHandshaker to negotiate protocol version.
+   * <p>
+   * Return the lower of the protocol version suggested in the
+   * clien hello and the highest supported by the server.
+   */
+  ProtocolVersion selectProtocolVersion(ProtocolVersion protocolVersion) {
+    if (activeProtocols == null) {
+      activeProtocols = getActiveProtocols();
     }
 
-    void setPeerSupportedSignAlgs(
-            Collection<SignatureAndHashAlgorithm> algorithms) {
-        peerSupportedSignAlgs =
-            new ArrayList<SignatureAndHashAlgorithm>(algorithms);
-    }
+    return activeProtocols.selectProtocolVersion(protocolVersion);
+  }
 
-    Collection<SignatureAndHashAlgorithm> getPeerSupportedSignAlgs() {
-        return peerSupportedSignAlgs;
-    }
+  /**
+   * Get the active cipher suites.
+   * <p>
+   * In TLS 1.1, many weak or vulnerable cipher suites were obsoleted,
+   * such as TLS_RSA_EXPORT_WITH_RC4_40_MD5. The implementation MUST NOT
+   * negotiate these cipher suites in TLS 1.1 or later mode.
+   * <p>
+   * Therefore, when the active protocols only include TLS 1.1 or later,
+   * the client cannot request to negotiate those obsoleted cipher
+   * suites.  That is, the obsoleted suites should not be included in the
+   * client hello. So we need to create a subset of the enabled cipher
+   * suites, the active cipher suites, which does not contain obsoleted
+   * cipher suites of the minimum active protocol.
+   * <p>
+   * Return empty list instead of null if no active cipher suites.
+   */
+  CipherSuiteList getActiveCipherSuites() {
+    if (activeCipherSuites == null) {
+      if (activeProtocols == null) {
+        activeProtocols = getActiveProtocols();
+      }
 
-
-    /**
-     * Set the identification protocol. Called from the constructor or
-     * SSLSocketImpl/SSLEngineImpl.setIdentificationProtocol() (if the
-     * handshake is not yet in progress).
-     */
-    void setIdentificationProtocol(String protocol) {
-        this.identificationProtocol = protocol;
-    }
-
-    /**
-     * Prior to handshaking, activate the handshake and initialize the version,
-     * input stream and output stream.
-     */
-    void activate(ProtocolVersion helloVersion) throws IOException {
-        if (activeProtocols == null) {
-            activeProtocols = getActiveProtocols();
-        }
-
-        if (activeProtocols.collection().isEmpty() ||
-                activeProtocols.max.v == ProtocolVersion.NONE.v) {
-            throw new SSLHandshakeException("No appropriate protocol");
-        }
-
-        if (activeCipherSuites == null) {
-            activeCipherSuites = getActiveCipherSuites();
-        }
-
-        if (activeCipherSuites.collection().isEmpty()) {
-            throw new SSLHandshakeException("No appropriate cipher suite");
-        }
-
-        // temporary protocol version until the actual protocol version
-        // is negotiated in the Hello exchange. This affects the record
-        // version we sent with the ClientHello.
-        if (!isInitialHandshake) {
-            protocolVersion = activeProtocolVersion;
-        } else {
-            protocolVersion = activeProtocols.max;
-        }
-
-        if (helloVersion == null || helloVersion.v == ProtocolVersion.NONE.v) {
-            helloVersion = activeProtocols.helloVersion;
-        }
-
-        // We accumulate digests of the handshake messages so that
-        // we can read/write CertificateVerify and Finished messages,
-        // getting assurance against some particular active attacks.
-        Set<String> localSupportedHashAlgorithms =
-            SignatureAndHashAlgorithm.getHashAlgorithmNames(
-                getLocalSupportedSignAlgs());
-        handshakeHash = new HandshakeHash(!isClient, needCertVerify,
-            localSupportedHashAlgorithms);
-
-        // Generate handshake input/output stream.
-        input = new HandshakeInStream(handshakeHash);
-        if (conn != null) {
-            output = new HandshakeOutStream(protocolVersion, helloVersion,
-                                        handshakeHash, conn);
-            conn.getAppInputStream().r.setHandshakeHash(handshakeHash);
-            conn.getAppInputStream().r.setHelloVersion(helloVersion);
-            conn.getAppOutputStream().r.setHelloVersion(helloVersion);
-        } else {
-            output = new HandshakeOutStream(protocolVersion, helloVersion,
-                                        handshakeHash, engine);
-            engine.inputRecord.setHandshakeHash(handshakeHash);
-            engine.inputRecord.setHelloVersion(helloVersion);
-            engine.outputRecord.setHelloVersion(helloVersion);
-        }
-
-        // move state to activated
-        state = -1;
-    }
-
-    /**
-     * Set cipherSuite and keyExchange to the given CipherSuite.
-     * Does not perform any verification that this is a valid selection,
-     * this must be done before calling this method.
-     */
-    void setCipherSuite(CipherSuite s) {
-        this.cipherSuite = s;
-        this.keyExchange = s.keyExchange;
-    }
-
-    /**
-     * Check if the given ciphersuite is enabled and available.
-     * Does not check if the required server certificates are available.
-     */
-    boolean isNegotiable(CipherSuite s) {
-        if (activeCipherSuites == null) {
-            activeCipherSuites = getActiveCipherSuites();
-        }
-
-        return activeCipherSuites.contains(s) && s.isNegotiable();
-    }
-
-    /**
-     * Check if the given protocol version is enabled and available.
-     */
-    boolean isNegotiable(ProtocolVersion protocolVersion) {
-        if (activeProtocols == null) {
-            activeProtocols = getActiveProtocols();
-        }
-
-        return activeProtocols.contains(protocolVersion);
-    }
-
-    /**
-     * Select a protocol version from the list. Called from
-     * ServerHandshaker to negotiate protocol version.
-     *
-     * Return the lower of the protocol version suggested in the
-     * clien hello and the highest supported by the server.
-     */
-    ProtocolVersion selectProtocolVersion(ProtocolVersion protocolVersion) {
-        if (activeProtocols == null) {
-            activeProtocols = getActiveProtocols();
-        }
-
-        return activeProtocols.selectProtocolVersion(protocolVersion);
-    }
-
-    /**
-     * Get the active cipher suites.
-     *
-     * In TLS 1.1, many weak or vulnerable cipher suites were obsoleted,
-     * such as TLS_RSA_EXPORT_WITH_RC4_40_MD5. The implementation MUST NOT
-     * negotiate these cipher suites in TLS 1.1 or later mode.
-     *
-     * Therefore, when the active protocols only include TLS 1.1 or later,
-     * the client cannot request to negotiate those obsoleted cipher
-     * suites.  That is, the obsoleted suites should not be included in the
-     * client hello. So we need to create a subset of the enabled cipher
-     * suites, the active cipher suites, which does not contain obsoleted
-     * cipher suites of the minimum active protocol.
-     *
-     * Return empty list instead of null if no active cipher suites.
-     */
-    CipherSuiteList getActiveCipherSuites() {
-        if (activeCipherSuites == null) {
-            if (activeProtocols == null) {
-                activeProtocols = getActiveProtocols();
+      ArrayList<CipherSuite> suites = new ArrayList<>();
+      if (!(activeProtocols.collection().isEmpty()) &&
+          activeProtocols.min.v != ProtocolVersion.NONE.v) {
+        for (CipherSuite suite : enabledCipherSuites.collection()) {
+          if (suite.obsoleted > activeProtocols.min.v &&
+              suite.supported <= activeProtocols.max.v) {
+            if (algorithmConstraints.permits(
+                EnumSet.of(CryptoPrimitive.KEY_AGREEMENT),
+                suite.name, null)) {
+              suites.add(suite);
             }
-
-            ArrayList<CipherSuite> suites = new ArrayList<>();
-            if (!(activeProtocols.collection().isEmpty()) &&
-                    activeProtocols.min.v != ProtocolVersion.NONE.v) {
-                for (CipherSuite suite : enabledCipherSuites.collection()) {
-                    if (suite.obsoleted > activeProtocols.min.v &&
-                            suite.supported <= activeProtocols.max.v) {
-                        if (algorithmConstraints.permits(
-                                EnumSet.of(CryptoPrimitive.KEY_AGREEMENT),
-                                suite.name, null)) {
-                            suites.add(suite);
-                        }
-                    } else if (debug != null && Debug.isOn("verbose")) {
-                        if (suite.obsoleted <= activeProtocols.min.v) {
-                            System.out.println(
-                                "Ignoring obsoleted cipher suite: " + suite);
-                        } else {
-                            System.out.println(
-                                "Ignoring unsupported cipher suite: " + suite);
-                        }
-                    }
-                }
+          } else if (debug != null && Debug.isOn("verbose")) {
+            if (suite.obsoleted <= activeProtocols.min.v) {
+              System.out.println(
+                  "Ignoring obsoleted cipher suite: " + suite);
+            } else {
+              System.out.println(
+                  "Ignoring unsupported cipher suite: " + suite);
             }
-            activeCipherSuites = new CipherSuiteList(suites);
+          }
         }
-
-        return activeCipherSuites;
+      }
+      activeCipherSuites = new CipherSuiteList(suites);
     }
 
-    /*
-     * Get the active protocol versions.
-     *
-     * In TLS 1.1, many weak or vulnerable cipher suites were obsoleted,
-     * such as TLS_RSA_EXPORT_WITH_RC4_40_MD5. The implementation MUST NOT
-     * negotiate these cipher suites in TLS 1.1 or later mode.
-     *
-     * For example, if "TLS_RSA_EXPORT_WITH_RC4_40_MD5" is the
-     * only enabled cipher suite, the client cannot request TLS 1.1 or
-     * later, even though TLS 1.1 or later is enabled.  We need to create a
-     * subset of the enabled protocols, called the active protocols, which
-     * contains protocols appropriate to the list of enabled Ciphersuites.
-     *
-     * Return empty list instead of null if no active protocol versions.
-     */
-    ProtocolList getActiveProtocols() {
-        if (activeProtocols == null) {
-            ArrayList<ProtocolVersion> protocols = new ArrayList<>(4);
-            for (ProtocolVersion protocol : enabledProtocols.collection()) {
-                boolean found = false;
-                for (CipherSuite suite : enabledCipherSuites.collection()) {
-                    if (suite.isAvailable() && suite.obsoleted > protocol.v &&
-                                               suite.supported <= protocol.v) {
-                        if (algorithmConstraints.permits(
-                                EnumSet.of(CryptoPrimitive.KEY_AGREEMENT),
-                                suite.name, null)) {
-                            protocols.add(protocol);
-                            found = true;
-                            break;
-                        } else if (debug != null && Debug.isOn("verbose")) {
-                            System.out.println(
-                                "Ignoring disabled cipher suite: " + suite +
-                                 " for " + protocol);
-                        }
-                    } else if (debug != null && Debug.isOn("verbose")) {
-                        System.out.println(
-                            "Ignoring unsupported cipher suite: " + suite +
-                                 " for " + protocol);
-                    }
-                }
-                if (!found && (debug != null) && Debug.isOn("handshake")) {
-                    System.out.println(
-                        "No available cipher suite for " + protocol);
-                }
+    return activeCipherSuites;
+  }
+
+  /*
+   * Get the active protocol versions.
+   *
+   * In TLS 1.1, many weak or vulnerable cipher suites were obsoleted,
+   * such as TLS_RSA_EXPORT_WITH_RC4_40_MD5. The implementation MUST NOT
+   * negotiate these cipher suites in TLS 1.1 or later mode.
+   *
+   * For example, if "TLS_RSA_EXPORT_WITH_RC4_40_MD5" is the
+   * only enabled cipher suite, the client cannot request TLS 1.1 or
+   * later, even though TLS 1.1 or later is enabled.  We need to create a
+   * subset of the enabled protocols, called the active protocols, which
+   * contains protocols appropriate to the list of enabled Ciphersuites.
+   *
+   * Return empty list instead of null if no active protocol versions.
+   */
+  ProtocolList getActiveProtocols() {
+    if (activeProtocols == null) {
+      ArrayList<ProtocolVersion> protocols = new ArrayList<>(4);
+      for (ProtocolVersion protocol : enabledProtocols.collection()) {
+        boolean found = false;
+        for (CipherSuite suite : enabledCipherSuites.collection()) {
+          if (suite.isAvailable() && suite.obsoleted > protocol.v &&
+              suite.supported <= protocol.v) {
+            if (algorithmConstraints.permits(
+                EnumSet.of(CryptoPrimitive.KEY_AGREEMENT),
+                suite.name, null)) {
+              protocols.add(protocol);
+              found = true;
+              break;
+            } else if (debug != null && Debug.isOn("verbose")) {
+              System.out.println(
+                  "Ignoring disabled cipher suite: " + suite +
+                      " for " + protocol);
             }
-            activeProtocols = new ProtocolList(protocols);
+          } else if (debug != null && Debug.isOn("verbose")) {
+            System.out.println(
+                "Ignoring unsupported cipher suite: " + suite +
+                    " for " + protocol);
+          }
         }
-
-        return activeProtocols;
-    }
-
-    /**
-     * As long as handshaking has not activated, we can
-     * change whether session creations are allowed.
-     *
-     * Callers should do their own checking if handshaking
-     * has activated.
-     */
-    void setEnableSessionCreation(boolean newSessions) {
-        enableNewSession = newSessions;
-    }
-
-    /**
-     * Create a new read cipher and return it to caller.
-     */
-    CipherBox newReadCipher() throws NoSuchAlgorithmException {
-        BulkCipher cipher = cipherSuite.cipher;
-        CipherBox box;
-        if (isClient) {
-            box = cipher.newCipher(protocolVersion, svrWriteKey, svrWriteIV,
-                                   sslContext.getSecureRandom(), false);
-            svrWriteKey = null;
-            svrWriteIV = null;
-        } else {
-            box = cipher.newCipher(protocolVersion, clntWriteKey, clntWriteIV,
-                                   sslContext.getSecureRandom(), false);
-            clntWriteKey = null;
-            clntWriteIV = null;
+        if (!found && (debug != null) && Debug.isOn("handshake")) {
+          System.out.println(
+              "No available cipher suite for " + protocol);
         }
-        return box;
+      }
+      activeProtocols = new ProtocolList(protocols);
     }
 
-    /**
-     * Create a new write cipher and return it to caller.
-     */
-    CipherBox newWriteCipher() throws NoSuchAlgorithmException {
-        BulkCipher cipher = cipherSuite.cipher;
-        CipherBox box;
-        if (isClient) {
-            box = cipher.newCipher(protocolVersion, clntWriteKey, clntWriteIV,
-                                   sslContext.getSecureRandom(), true);
-            clntWriteKey = null;
-            clntWriteIV = null;
-        } else {
-            box = cipher.newCipher(protocolVersion, svrWriteKey, svrWriteIV,
-                                   sslContext.getSecureRandom(), true);
-            svrWriteKey = null;
-            svrWriteIV = null;
-        }
-        return box;
+    return activeProtocols;
+  }
+
+  /**
+   * As long as handshaking has not activated, we can
+   * change whether session creations are allowed.
+   * <p>
+   * Callers should do their own checking if handshaking
+   * has activated.
+   */
+  void setEnableSessionCreation(boolean newSessions) {
+    enableNewSession = newSessions;
+  }
+
+  /**
+   * Create a new read cipher and return it to caller.
+   */
+  CipherBox newReadCipher() throws NoSuchAlgorithmException {
+    BulkCipher cipher = cipherSuite.cipher;
+    CipherBox box;
+    if (isClient) {
+      box = cipher.newCipher(protocolVersion, svrWriteKey, svrWriteIV,
+          sslContext.getSecureRandom(), false);
+      svrWriteKey = null;
+      svrWriteIV = null;
+    } else {
+      box = cipher.newCipher(protocolVersion, clntWriteKey, clntWriteIV,
+          sslContext.getSecureRandom(), false);
+      clntWriteKey = null;
+      clntWriteIV = null;
+    }
+    return box;
+  }
+
+  /**
+   * Create a new write cipher and return it to caller.
+   */
+  CipherBox newWriteCipher() throws NoSuchAlgorithmException {
+    BulkCipher cipher = cipherSuite.cipher;
+    CipherBox box;
+    if (isClient) {
+      box = cipher.newCipher(protocolVersion, clntWriteKey, clntWriteIV,
+          sslContext.getSecureRandom(), true);
+      clntWriteKey = null;
+      clntWriteIV = null;
+    } else {
+      box = cipher.newCipher(protocolVersion, svrWriteKey, svrWriteIV,
+          sslContext.getSecureRandom(), true);
+      svrWriteKey = null;
+      svrWriteIV = null;
+    }
+    return box;
+  }
+
+  /**
+   * Create a new read MAC and return it to caller.
+   */
+  Authenticator newReadAuthenticator()
+      throws NoSuchAlgorithmException, InvalidKeyException {
+
+    Authenticator authenticator = null;
+    if (cipherSuite.cipher.cipherType == AEAD_CIPHER) {
+      authenticator = new Authenticator(protocolVersion);
+    } else {
+      MacAlg macAlg = cipherSuite.macAlg;
+      if (isClient) {
+        authenticator = macAlg.newMac(protocolVersion, svrMacSecret);
+        svrMacSecret = null;
+      } else {
+        authenticator = macAlg.newMac(protocolVersion, clntMacSecret);
+        clntMacSecret = null;
+      }
     }
 
-    /**
-     * Create a new read MAC and return it to caller.
-     */
-    MAC newReadMAC() throws NoSuchAlgorithmException, InvalidKeyException {
-        MacAlg macAlg = cipherSuite.macAlg;
-        MAC mac;
-        if (isClient) {
-            mac = macAlg.newMac(protocolVersion, svrMacSecret);
-            svrMacSecret = null;
-        } else {
-            mac = macAlg.newMac(protocolVersion, clntMacSecret);
-            clntMacSecret = null;
-        }
-        return mac;
+    return authenticator;
+  }
+
+  /**
+   * Create a new write MAC and return it to caller.
+   */
+  Authenticator newWriteAuthenticator()
+      throws NoSuchAlgorithmException, InvalidKeyException {
+
+    Authenticator authenticator = null;
+    if (cipherSuite.cipher.cipherType == AEAD_CIPHER) {
+      authenticator = new Authenticator(protocolVersion);
+    } else {
+      MacAlg macAlg = cipherSuite.macAlg;
+      if (isClient) {
+        authenticator = macAlg.newMac(protocolVersion, clntMacSecret);
+        clntMacSecret = null;
+      } else {
+        authenticator = macAlg.newMac(protocolVersion, svrMacSecret);
+        svrMacSecret = null;
+      }
     }
 
-    /**
-     * Create a new write MAC and return it to caller.
-     */
-    MAC newWriteMAC() throws NoSuchAlgorithmException, InvalidKeyException {
-        MacAlg macAlg = cipherSuite.macAlg;
-        MAC mac;
-        if (isClient) {
-            mac = macAlg.newMac(protocolVersion, clntMacSecret);
-            clntMacSecret = null;
-        } else {
-            mac = macAlg.newMac(protocolVersion, svrMacSecret);
-            svrMacSecret = null;
-        }
-        return mac;
+    return authenticator;
+  }
+
+  /*
+   * Returns true iff the handshake sequence is done, so that
+   * this freshly created session can become the current one.
+   */
+  boolean isDone() {
+    return state == HandshakeMessage.ht_finished;
+  }
+
+
+  /*
+   * Returns the session which was created through this
+   * handshake sequence ... should be called after isDone()
+   * returns true.
+   */
+  SSLSessionImpl getSession() {
+    return session;
+  }
+
+  /*
+   * Set the handshake session
+   */
+  void setHandshakeSessionSE(SSLSessionImpl handshakeSession) {
+    if (conn != null) {
+      conn.setHandshakeSession(handshakeSession);
+    } else {
+      engine.setHandshakeSession(handshakeSession);
     }
+  }
 
-    /*
-     * Returns true iff the handshake sequence is done, so that
-     * this freshly created session can become the current one.
-     */
-    boolean isDone() {
-        return state == HandshakeMessage.ht_finished;
-    }
+  /*
+   * Returns true if renegotiation is in use for this connection.
+   */
+  boolean isSecureRenegotiation() {
+    return secureRenegotiation;
+  }
 
+  /*
+   * Returns the verify_data from the Finished message sent by the client.
+   */
+  byte[] getClientVerifyData() {
+    return clientVerifyData;
+  }
 
-    /*
-     * Returns the session which was created through this
-     * handshake sequence ... should be called after isDone()
-     * returns true.
-     */
-    SSLSessionImpl getSession() {
-        return session;
-    }
+  /*
+   * Returns the verify_data from the Finished message sent by the server.
+   */
+  byte[] getServerVerifyData() {
+    return serverVerifyData;
+  }
 
-    /*
-     * Set the handshake session
-     */
-    void setHandshakeSessionSE(SSLSessionImpl handshakeSession) {
-        if (conn != null) {
-            conn.setHandshakeSession(handshakeSession);
-        } else {
-            engine.setHandshakeSession(handshakeSession);
-        }
-    }
+  /*
+   * This routine is fed SSL handshake records when they become available,
+   * and processes messages found therein.
+   */
+  void process_record(InputRecord r, boolean expectingFinished)
+      throws IOException {
 
-    /*
-     * Returns true if renegotiation is in use for this connection.
-     */
-    boolean isSecureRenegotiation() {
-        return secureRenegotiation;
-    }
-
-    /*
-     * Returns the verify_data from the Finished message sent by the client.
-     */
-    byte[] getClientVerifyData() {
-        return clientVerifyData;
-    }
-
-    /*
-     * Returns the verify_data from the Finished message sent by the server.
-     */
-    byte[] getServerVerifyData() {
-        return serverVerifyData;
-    }
-
-    /*
-     * This routine is fed SSL handshake records when they become available,
-     * and processes messages found therein.
-     */
-    void process_record(InputRecord r, boolean expectingFinished)
-            throws IOException {
-
-        checkThrown();
+    checkThrown();
 
         /*
          * Store the incoming handshake data, then see if we can
          * now process any completed handshake messages
          */
-        input.incomingRecord(r);
+    input.incomingRecord(r);
 
         /*
          * We don't need to create a separate delegatable task
          * for finished messages.
          */
-        if ((conn != null) || expectingFinished) {
-            processLoop();
-        } else {
-            delegateTask(new PrivilegedExceptionAction<Void>() {
-                public Void run() throws Exception {
-                    processLoop();
-                    return null;
-                }
-            });
+    if ((conn != null) || expectingFinished) {
+      processLoop();
+    } else {
+      delegateTask(new PrivilegedExceptionAction<Void>() {
+        @Override
+        public Void run() throws Exception {
+          processLoop();
+          return null;
         }
+      });
     }
+  }
 
-    /*
-     * On input, we hash messages one at a time since servers may need
-     * to access an intermediate hash to validate a CertificateVerify
-     * message.
-     *
-     * Note that many handshake messages can come in one record (and often
-     * do, to reduce network resource utilization), and one message can also
-     * require multiple records (e.g. very large Certificate messages).
-     */
-    void processLoop() throws IOException {
+  /*
+   * On input, we hash messages one at a time since servers may need
+   * to access an intermediate hash to validate a CertificateVerify
+   * message.
+   *
+   * Note that many handshake messages can come in one record (and often
+   * do, to reduce network resource utilization), and one message can also
+   * require multiple records (e.g. very large Certificate messages).
+   */
+  void processLoop() throws IOException {
 
-        // need to read off 4 bytes at least to get the handshake
-        // message type and length.
-        while (input.available() >= 4) {
-            byte messageType;
-            int messageLen;
+    // need to read off 4 bytes at least to get the handshake
+    // message type and length.
+    while (input.available() >= 4) {
+      byte messageType;
+      int messageLen;
 
             /*
              * See if we can read the handshake message header, and
              * then the entire handshake message.  If not, wait till
              * we can read and process an entire message.
              */
-            input.mark(4);
+      input.mark(4);
 
-            messageType = (byte)input.getInt8();
-            messageLen = input.getInt24();
+      messageType = (byte) input.getInt8();
+      messageLen = input.getInt24();
 
-            if (input.available() < messageLen) {
-                input.reset();
-                return;
-            }
+      if (input.available() < messageLen) {
+        input.reset();
+        return;
+      }
 
             /*
-             * Process the messsage.  We require
+             * Process the message.  We require
              * that processMessage() consumes the entire message.  In
              * lieu of explicit error checks (how?!) we assume that the
              * data will look like garbage on encoding/processing errors,
@@ -873,86 +914,86 @@ abstract class Handshaker {
              * Also, note that hello request messages are never hashed;
              * that includes the hello request header, too.
              */
-            if (messageType == HandshakeMessage.ht_hello_request) {
-                input.reset();
-                processMessage(messageType, messageLen);
-                input.ignore(4 + messageLen);
-            } else {
-                input.mark(messageLen);
-                processMessage(messageType, messageLen);
-                input.digestNow();
-            }
-        }
+      if (messageType == HandshakeMessage.ht_hello_request) {
+        input.reset();
+        processMessage(messageType, messageLen);
+        input.ignore(4 + messageLen);
+      } else {
+        input.mark(messageLen);
+        processMessage(messageType, messageLen);
+        input.digestNow();
+      }
+    }
+  }
+
+
+  /**
+   * Returns true iff the handshaker has been activated.
+   * <p>
+   * In activated state, the handshaker may not send any messages out.
+   */
+  boolean activated() {
+    return state >= -1;
+  }
+
+  /**
+   * Returns true iff the handshaker has sent any messages.
+   */
+  boolean started() {
+    return state >= 0;  // 0: HandshakeMessage.ht_hello_request
+    // 1: HandshakeMessage.ht_client_hello
+  }
+
+
+  /*
+   * Used to kickstart the negotiation ... either writing a
+   * ClientHello or a HelloRequest as appropriate, whichever
+   * the subclass returns.  NOP if handshaking's already started.
+   */
+  void kickstart() throws IOException {
+    if (state >= 0) {
+      return;
     }
 
+    HandshakeMessage m = getKickstartMessage();
 
-    /**
-     * Returns true iff the handshaker has been activated.
-     *
-     * In activated state, the handshaker may not send any messages out.
-     */
-    boolean activated() {
-        return state >= -1;
+    if (debug != null && Debug.isOn("handshake")) {
+      m.print(System.out);
     }
+    m.write(output);
+    output.flush();
 
-    /**
-     * Returns true iff the handshaker has sent any messages.
-     */
-    boolean started() {
-        return state >= 0;  // 0: HandshakeMessage.ht_hello_request
-                            // 1: HandshakeMessage.ht_client_hello
-    }
+    state = m.messageType();
+  }
 
+  /**
+   * Both client and server modes can start handshaking; but the
+   * message they send to do so is different.
+   */
+  abstract HandshakeMessage getKickstartMessage() throws SSLException;
 
-    /*
-     * Used to kickstart the negotiation ... either writing a
-     * ClientHello or a HelloRequest as appropriate, whichever
-     * the subclass returns.  NOP if handshaking's already started.
-     */
-    void kickstart() throws IOException {
-        if (state >= 0) {
-            return;
-        }
+  /*
+   * Client and Server side protocols are each driven though this
+   * call, which processes a single message and drives the appropriate
+   * side of the protocol state machine (depending on the subclass).
+   */
+  abstract void processMessage(byte messageType, int messageLen)
+      throws IOException;
 
-        HandshakeMessage m = getKickstartMessage();
+  /*
+   * Most alerts in the protocol relate to handshaking problems.
+   * Alerts are detected as the connection reads data.
+   */
+  abstract void handshakeAlert(byte description) throws SSLProtocolException;
 
-        if (debug != null && Debug.isOn("handshake")) {
-            m.print(System.out);
-        }
-        m.write(output);
-        output.flush();
+  /*
+   * Sends a change cipher spec message and updates the write side
+   * cipher state so that future messages use the just-negotiated spec.
+   */
+  void sendChangeCipherSpec(Finished mesg, boolean lastMessage)
+      throws IOException {
 
-        state = m.messageType();
-    }
-
-    /**
-     * Both client and server modes can start handshaking; but the
-     * message they send to do so is different.
-     */
-    abstract HandshakeMessage getKickstartMessage() throws SSLException;
-
-    /*
-     * Client and Server side protocols are each driven though this
-     * call, which processes a single message and drives the appropriate
-     * side of the protocol state machine (depending on the subclass).
-     */
-    abstract void processMessage(byte messageType, int messageLen)
-        throws IOException;
-
-    /*
-     * Most alerts in the protocol relate to handshaking problems.
-     * Alerts are detected as the connection reads data.
-     */
-    abstract void handshakeAlert(byte description) throws SSLProtocolException;
-
-    /*
-     * Sends a change cipher spec message and updates the write side
-     * cipher state so that future messages use the just-negotiated spec.
-     */
-    void sendChangeCipherSpec(Finished mesg, boolean lastMessage)
-            throws IOException {
-
-        output.flush(); // i.e. handshake data
+    output.flush(); // i.e. handshake data
 
         /*
          * The write cipher state is protected by the connection write lock
@@ -964,212 +1005,141 @@ abstract class Handshaker {
          * We already hold SSLEngine/SSLSocket "this" by virtue
          * of this being called from the readRecord code.
          */
-        OutputRecord r;
-        if (conn != null) {
-            r = new OutputRecord(Record.ct_change_cipher_spec);
-        } else {
-            r = new EngineOutputRecord(Record.ct_change_cipher_spec, engine);
-        }
-
-        r.setVersion(protocolVersion);
-        r.write(1);     // single byte of data
-
-        if (conn != null) {
-            conn.writeLock.lock();
-            try {
-                conn.writeRecord(r);
-                conn.changeWriteCiphers();
-                // NPN_CHANGES_BEGIN
-                sendNextProtocol(NextProtoNego.get(conn));
-                mesg = updateFinished(mesg);
-                // NPN_CHANGES_END
-                if (debug != null && Debug.isOn("handshake")) {
-                    mesg.print(System.out);
-                }
-                mesg.write(output);
-                output.flush();
-            } finally {
-                conn.writeLock.unlock();
-            }
-        } else {
-            synchronized (engine.writeLock) {
-                engine.writeRecord((EngineOutputRecord)r);
-                engine.changeWriteCiphers();
-                // NPN_CHANGES_BEGIN
-                sendNextProtocol(NextProtoNego.get(engine));
-                mesg = updateFinished(mesg);
-                // NPN_CHANGES_END
-                if (debug != null && Debug.isOn("handshake")) {
-                    mesg.print(System.out);
-                }
-                mesg.write(output);
-
-                if (lastMessage) {
-                    output.setFinishedMsg();
-                }
-                output.flush();
-            }
-        }
+    OutputRecord r;
+    if (conn != null) {
+      r = new OutputRecord(Record.ct_change_cipher_spec);
+    } else {
+      r = new EngineOutputRecord(Record.ct_change_cipher_spec, engine);
     }
 
-    /*
-     * Single access point to key calculation logic.  Given the
-     * pre-master secret and the nonces from client and server,
-     * produce all the keying material to be used.
-     */
-    void calculateKeys(SecretKey preMasterSecret, ProtocolVersion version) {
-        SecretKey master = calculateMasterSecret(preMasterSecret, version);
-        session.setMasterSecret(master);
-        calculateConnectionKeys(master);
-    }
+    r.setVersion(protocolVersion);
+    r.write(1);     // single byte of data
 
-
-    /*
-     * Calculate the master secret from its various components.  This is
-     * used for key exchange by all cipher suites.
-     *
-     * The master secret is the catenation of three MD5 hashes, each
-     * consisting of the pre-master secret and a SHA1 hash.  Those three
-     * SHA1 hashes are of (different) constant strings, the pre-master
-     * secret, and the nonces provided by the client and the server.
-     */
-    private SecretKey calculateMasterSecret(SecretKey preMasterSecret,
-            ProtocolVersion requestedVersion) {
-
-        if (debug != null && Debug.isOn("keygen")) {
-            HexDumpEncoder      dump = new HexDumpEncoder();
-
-            System.out.println("SESSION KEYGEN:");
-
-            System.out.println("PreMaster Secret:");
-            printHex(dump, preMasterSecret.getEncoded());
-
-            // Nonces are dumped with connection keygen, no
-            // benefit to doing it twice
-        }
-
-        // What algs/params do we need to use?
-        String masterAlg;
-        PRF prf;
-
-        if (protocolVersion.v >= ProtocolVersion.TLS12.v) {
-            masterAlg = "SunTls12MasterSecret";
-            prf = cipherSuite.prfAlg;
-        } else {
-            masterAlg = "SunTlsMasterSecret";
-            prf = P_NONE;
-        }
-
-        String prfHashAlg = prf.getPRFHashAlg();
-        int prfHashLength = prf.getPRFHashLength();
-        int prfBlockSize = prf.getPRFBlockSize();
-
-        TlsMasterSecretParameterSpec spec = new TlsMasterSecretParameterSpec(
-                preMasterSecret, protocolVersion.major, protocolVersion.minor,
-                clnt_random.random_bytes, svr_random.random_bytes,
-                prfHashAlg, prfHashLength, prfBlockSize);
-
-        SecretKey masterSecret;
-        try {
-            KeyGenerator kg = JsseJce.getKeyGenerator(masterAlg);
-            kg.init(spec);
-            masterSecret = kg.generateKey();
-        } catch (GeneralSecurityException e) {
-            // For RSA premaster secrets, do not signal a protocol error
-            // due to the Bleichenbacher attack. See comments further down.
-            if (!preMasterSecret.getAlgorithm().equals(
-                    "TlsRsaPremasterSecret")) {
-                throw new ProviderException(e);
-            }
-
-            if (debug != null && Debug.isOn("handshake")) {
-                System.out.println("RSA master secret generation error:");
-                e.printStackTrace(System.out);
-            }
-
-            if (requestedVersion != null) {
-                preMasterSecret =
-                    RSAClientKeyExchange.generateDummySecret(requestedVersion);
-            } else {
-                preMasterSecret =
-                    RSAClientKeyExchange.generateDummySecret(protocolVersion);
-            }
-
-            // recursive call with new premaster secret
-            return calculateMasterSecret(preMasterSecret, null);
-        }
-
-        // if no version check requested (client side handshake), or version
-        // information is not available (not an RSA premaster secret),
-        // return master secret immediately.
-        if ((requestedVersion == null) ||
-                !(masterSecret instanceof TlsMasterSecret)) {
-            return masterSecret;
-        }
-
-        // we have checked the ClientKeyExchange message when reading TLS
-        // record, the following check is necessary to ensure that
-        // JCE provider does not ignore the checking, or the previous
-        // checking process bypassed the premaster secret version checking.
-        TlsMasterSecret tlsKey = (TlsMasterSecret)masterSecret;
-        int major = tlsKey.getMajorVersion();
-        int minor = tlsKey.getMinorVersion();
-        if ((major < 0) || (minor < 0)) {
-            return masterSecret;
-        }
-
-        // check if the premaster secret version is ok
-        // the specification says that it must be the maximum version supported
-        // by the client from its ClientHello message. However, many
-        // implementations send the negotiated version, so accept both
-        // for SSL v3.0 and TLS v1.0.
-        // NOTE that we may be comparing two unsupported version numbers, which
-        // is why we cannot use object reference equality in this special case.
-        ProtocolVersion premasterVersion =
-                                    ProtocolVersion.valueOf(major, minor);
-        boolean versionMismatch = (premasterVersion.v != requestedVersion.v);
-
-        /*
-         * we never checked the client_version in server side
-         * for TLS v1.0 and SSL v3.0. For compatibility, we
-         * maintain this behavior.
-         */
-        if (versionMismatch && requestedVersion.v <= ProtocolVersion.TLS10.v) {
-            versionMismatch = (premasterVersion.v != protocolVersion.v);
-        }
-
-        if (versionMismatch == false) {
-            // check passed, return key
-            return masterSecret;
-        }
-
-        // Due to the Bleichenbacher attack, do not signal a protocol error.
-        // Generate a random premaster secret and continue with the handshake,
-        // which will fail when verifying the finished messages.
-        // For more information, see comments in PreMasterSecret.
+    if (conn != null) {
+      conn.writeLock.lock();
+      try {
+        conn.writeRecord(r);
+        conn.changeWriteCiphers();
+        // NPN_CHANGES_BEGIN
+        sendNextProtocol(NextProtoNego.get(conn));
+        mesg = updateFinished(mesg);
+        // NPN_CHANGES_END
         if (debug != null && Debug.isOn("handshake")) {
-            System.out.println("RSA PreMasterSecret version error: expected"
-                + protocolVersion + " or " + requestedVersion + ", decrypted: "
-                + premasterVersion);
+          mesg.print(System.out);
         }
-        preMasterSecret =
-            RSAClientKeyExchange.generateDummySecret(requestedVersion);
+        mesg.write(output);
+        output.flush();
+      } finally {
+        conn.writeLock.unlock();
+      }
+    } else {
+      synchronized (engine.writeLock) {
+        engine.writeRecord((EngineOutputRecord) r);
+        engine.changeWriteCiphers();
+        // NPN_CHANGES_BEGIN
+        sendNextProtocol(NextProtoNego.get(conn));
+        mesg = updateFinished(mesg);
+        // NPN_CHANGES_END
+        if (debug != null && Debug.isOn("handshake")) {
+          mesg.print(System.out);
+        }
+        mesg.write(output);
 
-        // recursive call with new premaster secret
-        return calculateMasterSecret(preMasterSecret, null);
+        if (lastMessage) {
+          output.setFinishedMsg();
+        }
+        output.flush();
+      }
+    }
+  }
+
+  /*
+   * Single access point to key calculation logic.  Given the
+   * pre-master secret and the nonces from client and server,
+   * produce all the keying material to be used.
+   */
+  void calculateKeys(SecretKey preMasterSecret, ProtocolVersion version) {
+    SecretKey master = calculateMasterSecret(preMasterSecret, version);
+    session.setMasterSecret(master);
+    calculateConnectionKeys(master);
+  }
+
+
+  /*
+   * Calculate the master secret from its various components.  This is
+   * used for key exchange by all cipher suites.
+   *
+   * The master secret is the catenation of three MD5 hashes, each
+   * consisting of the pre-master secret and a SHA1 hash.  Those three
+   * SHA1 hashes are of (different) constant strings, the pre-master
+   * secret, and the nonces provided by the client and the server.
+   */
+  private SecretKey calculateMasterSecret(SecretKey preMasterSecret,
+                                          ProtocolVersion requestedVersion) {
+
+    if (debug != null && Debug.isOn("keygen")) {
+      HexDumpEncoder dump = new HexDumpEncoder();
+
+      System.out.println("SESSION KEYGEN:");
+
+      System.out.println("PreMaster Secret:");
+      printHex(dump, preMasterSecret.getEncoded());
+
+      // Nonces are dumped with connection keygen, no
+      // benefit to doing it twice
     }
 
-    /*
-     * Calculate the keys needed for this connection, once the session's
-     * master secret has been calculated.  Uses the master key and nonces;
-     * the amount of keying material generated is a function of the cipher
-     * suite that's been negotiated.
-     *
-     * This gets called both on the "full handshake" (where we exchanged
-     * a premaster secret and started a new session) as well as on the
-     * "fast handshake" (where we just resumed a pre-existing session).
-     */
-    void calculateConnectionKeys(SecretKey masterKey) {
+    // What algs/params do we need to use?
+    String masterAlg;
+    PRF prf;
+
+    if (protocolVersion.v >= ProtocolVersion.TLS12.v) {
+      masterAlg = "SunTls12MasterSecret";
+      prf = cipherSuite.prfAlg;
+    } else {
+      masterAlg = "SunTlsMasterSecret";
+      prf = P_NONE;
+    }
+
+    String prfHashAlg = prf.getPRFHashAlg();
+    int prfHashLength = prf.getPRFHashLength();
+    int prfBlockSize = prf.getPRFBlockSize();
+
+    TlsMasterSecretParameterSpec spec = new TlsMasterSecretParameterSpec(
+        preMasterSecret, protocolVersion.major, protocolVersion.minor,
+        clnt_random.random_bytes, svr_random.random_bytes,
+        prfHashAlg, prfHashLength, prfBlockSize);
+
+    try {
+      KeyGenerator kg = JsseJce.getKeyGenerator(masterAlg);
+      kg.init(spec);
+      return kg.generateKey();
+    } catch (InvalidAlgorithmParameterException |
+        NoSuchAlgorithmException iae) {
+      // unlikely to happen, otherwise, must be a provider exception
+      //
+      // For RSA premaster secrets, do not signal a protocol error
+      // due to the Bleichenbacher attack. See comments further down.
+      if (debug != null && Debug.isOn("handshake")) {
+        System.out.println("RSA master secret generation error:");
+        iae.printStackTrace(System.out);
+      }
+      throw new ProviderException(iae);
+
+    }
+  }
+
+  /*
+   * Calculate the keys needed for this connection, once the session's
+   * master secret has been calculated.  Uses the master key and nonces;
+   * the amount of keying material generated is a function of the cipher
+   * suite that's been negotiated.
+   *
+   * This gets called both on the "full handshake" (where we exchanged
+   * a premaster secret and started a new session) as well as on the
+   * "fast handshake" (where we just resumed a pre-existing session).
+   */
+  void calculateConnectionKeys(SecretKey masterKey) {
         /*
          * For both the read and write sides of the protocol, we use the
          * master to generate MAC secrets and cipher keying material.  Block
@@ -1177,241 +1147,256 @@ abstract class Handshaker {
          *
          * First we figure out how much keying material is needed.
          */
-        int hashSize = cipherSuite.macAlg.size;
-        boolean is_exportable = cipherSuite.exportable;
-        BulkCipher cipher = cipherSuite.cipher;
-        int expandedKeySize = is_exportable ? cipher.expandedKeySize : 0;
+    int hashSize = cipherSuite.macAlg.size;
+    boolean is_exportable = cipherSuite.exportable;
+    BulkCipher cipher = cipherSuite.cipher;
+    int expandedKeySize = is_exportable ? cipher.expandedKeySize : 0;
 
-        // Which algs/params do we need to use?
-        String keyMaterialAlg;
-        PRF prf;
+    // Which algs/params do we need to use?
+    String keyMaterialAlg;
+    PRF prf;
 
-        if (protocolVersion.v >= ProtocolVersion.TLS12.v) {
-            keyMaterialAlg = "SunTls12KeyMaterial";
-            prf = cipherSuite.prfAlg;
+    if (protocolVersion.v >= ProtocolVersion.TLS12.v) {
+      keyMaterialAlg = "SunTls12KeyMaterial";
+      prf = cipherSuite.prfAlg;
+    } else {
+      keyMaterialAlg = "SunTlsKeyMaterial";
+      prf = P_NONE;
+    }
+
+    String prfHashAlg = prf.getPRFHashAlg();
+    int prfHashLength = prf.getPRFHashLength();
+    int prfBlockSize = prf.getPRFBlockSize();
+
+    // TLS v1.1 or later uses an explicit IV in CBC cipher suites to
+    // protect against the CBC attacks.  AEAD/GCM cipher suites in TLS
+    // v1.2 or later use a fixed IV as the implicit part of the partially
+    // implicit nonce technique described in RFC 5116.
+    int ivSize = cipher.ivSize;
+    if (cipher.cipherType == AEAD_CIPHER) {
+      ivSize = cipher.fixedIvSize;
+    } else if (protocolVersion.v >= ProtocolVersion.TLS11.v &&
+        cipher.cipherType == BLOCK_CIPHER) {
+      ivSize = 0;
+    }
+
+    TlsKeyMaterialParameterSpec spec = new TlsKeyMaterialParameterSpec(
+        masterKey, protocolVersion.major, protocolVersion.minor,
+        clnt_random.random_bytes, svr_random.random_bytes,
+        cipher.algorithm, cipher.keySize, expandedKeySize,
+        ivSize, hashSize,
+        prfHashAlg, prfHashLength, prfBlockSize);
+
+    try {
+      KeyGenerator kg = JsseJce.getKeyGenerator(keyMaterialAlg);
+      kg.init(spec);
+      TlsKeyMaterialSpec keySpec = (TlsKeyMaterialSpec) kg.generateKey();
+
+      // Return null if cipher keys are not supposed to be generated.
+      clntWriteKey = keySpec.getClientCipherKey();
+      svrWriteKey = keySpec.getServerCipherKey();
+
+      // Return null if IVs are not supposed to be generated.
+      clntWriteIV = keySpec.getClientIv();
+      svrWriteIV = keySpec.getServerIv();
+
+      // Return null if MAC keys are not supposed to be generated.
+      clntMacSecret = keySpec.getClientMacKey();
+      svrMacSecret = keySpec.getServerMacKey();
+    } catch (GeneralSecurityException e) {
+      throw new ProviderException(e);
+    }
+
+    //
+    // Dump the connection keys as they're generated.
+    //
+    if (debug != null && Debug.isOn("keygen")) {
+      synchronized (System.out) {
+        HexDumpEncoder dump = new HexDumpEncoder();
+
+        System.out.println("CONNECTION KEYGEN:");
+
+        // Inputs:
+        System.out.println("Client Nonce:");
+        printHex(dump, clnt_random.random_bytes);
+        System.out.println("Server Nonce:");
+        printHex(dump, svr_random.random_bytes);
+        System.out.println("Master Secret:");
+        printHex(dump, masterKey.getEncoded());
+
+        // Outputs:
+        if (clntMacSecret != null) {
+          System.out.println("Client MAC write Secret:");
+          printHex(dump, clntMacSecret.getEncoded());
+          System.out.println("Server MAC write Secret:");
+          printHex(dump, svrMacSecret.getEncoded());
         } else {
-            keyMaterialAlg = "SunTlsKeyMaterial";
-            prf = P_NONE;
+          System.out.println("... no MAC keys used for this cipher");
         }
 
-        String prfHashAlg = prf.getPRFHashAlg();
-        int prfHashLength = prf.getPRFHashLength();
-        int prfBlockSize = prf.getPRFBlockSize();
+        if (clntWriteKey != null) {
+          System.out.println("Client write key:");
+          printHex(dump, clntWriteKey.getEncoded());
+          System.out.println("Server write key:");
+          printHex(dump, svrWriteKey.getEncoded());
+        } else {
+          System.out.println("... no encryption keys used");
+        }
 
-        TlsKeyMaterialParameterSpec spec = new TlsKeyMaterialParameterSpec(
-            masterKey, protocolVersion.major, protocolVersion.minor,
-            clnt_random.random_bytes, svr_random.random_bytes,
-            cipher.algorithm, cipher.keySize, expandedKeySize,
-            cipher.ivSize, hashSize,
-            prfHashAlg, prfHashLength, prfBlockSize);
+        if (clntWriteIV != null) {
+          System.out.println("Client write IV:");
+          printHex(dump, clntWriteIV.getIV());
+          System.out.println("Server write IV:");
+          printHex(dump, svrWriteIV.getIV());
+        } else {
+          if (protocolVersion.v >= ProtocolVersion.TLS11.v) {
+            System.out.println(
+                "... no IV derived for this protocol");
+          } else {
+            System.out.println("... no IV used for this cipher");
+          }
+        }
+        System.out.flush();
+      }
+    }
+  }
 
+  private static void printHex(HexDumpEncoder dump, byte[] bytes) {
+    if (bytes == null) {
+      System.out.println("(key bytes not available)");
+    } else {
+      try {
+        dump.encodeBuffer(bytes, System.out);
+      } catch (IOException e) {
+        // just for debugging, ignore this
+      }
+    }
+  }
+
+  /**
+   * Throw an SSLException with the specified message and cause.
+   * Shorthand until a new SSLException constructor is added.
+   * This method never returns.
+   */
+  static void throwSSLException(String msg, Throwable cause)
+      throws SSLException {
+    SSLException e = new SSLException(msg);
+    e.initCause(cause);
+    throw e;
+  }
+
+
+  /*
+   * Implement a simple task delegator.
+   *
+   * We are currently implementing this as a single delegator, may
+   * try for parallel tasks later.  Client Authentication could
+   * benefit from this, where ClientKeyExchange/CertificateVerify
+   * could be carried out in parallel.
+   */
+  class DelegatedTask<E> implements Runnable {
+
+    private PrivilegedExceptionAction<E> pea;
+
+    DelegatedTask(PrivilegedExceptionAction<E> pea) {
+      this.pea = pea;
+    }
+
+    public void run() {
+      synchronized (engine) {
         try {
-            KeyGenerator kg = JsseJce.getKeyGenerator(keyMaterialAlg);
-            kg.init(spec);
-            TlsKeyMaterialSpec keySpec = (TlsKeyMaterialSpec)kg.generateKey();
-
-            clntWriteKey = keySpec.getClientCipherKey();
-            svrWriteKey = keySpec.getServerCipherKey();
-
-            // Return null if IVs are not supposed to be generated.
-            // e.g. TLS 1.1+.
-            clntWriteIV = keySpec.getClientIv();
-            svrWriteIV = keySpec.getServerIv();
-
-            clntMacSecret = keySpec.getClientMacKey();
-            svrMacSecret = keySpec.getServerMacKey();
-        } catch (GeneralSecurityException e) {
-            throw new ProviderException(e);
+          AccessController.doPrivileged(pea, engine.getAcc());
+        } catch (PrivilegedActionException pae) {
+          thrown = pae.getException();
+        } catch (RuntimeException rte) {
+          thrown = rte;
         }
-
-        //
-        // Dump the connection keys as they're generated.
-        //
-        if (debug != null && Debug.isOn("keygen")) {
-            synchronized (System.out) {
-                HexDumpEncoder  dump = new HexDumpEncoder();
-
-                System.out.println("CONNECTION KEYGEN:");
-
-                // Inputs:
-                System.out.println("Client Nonce:");
-                printHex(dump, clnt_random.random_bytes);
-                System.out.println("Server Nonce:");
-                printHex(dump, svr_random.random_bytes);
-                System.out.println("Master Secret:");
-                printHex(dump, masterKey.getEncoded());
-
-                // Outputs:
-                System.out.println("Client MAC write Secret:");
-                printHex(dump, clntMacSecret.getEncoded());
-                System.out.println("Server MAC write Secret:");
-                printHex(dump, svrMacSecret.getEncoded());
-
-                if (clntWriteKey != null) {
-                    System.out.println("Client write key:");
-                    printHex(dump, clntWriteKey.getEncoded());
-                    System.out.println("Server write key:");
-                    printHex(dump, svrWriteKey.getEncoded());
-                } else {
-                    System.out.println("... no encryption keys used");
-                }
-
-                if (clntWriteIV != null) {
-                    System.out.println("Client write IV:");
-                    printHex(dump, clntWriteIV.getIV());
-                    System.out.println("Server write IV:");
-                    printHex(dump, svrWriteIV.getIV());
-                } else {
-                    if (protocolVersion.v >= ProtocolVersion.TLS11.v) {
-                        System.out.println(
-                                "... no IV derived for this protocol");
-                    } else {
-                        System.out.println("... no IV used for this cipher");
-                    }
-                }
-                System.out.flush();
-            }
-        }
-    }
-
-    private static void printHex(HexDumpEncoder dump, byte[] bytes) {
-        if (bytes == null) {
-            System.out.println("(key bytes not available)");
-        } else {
-            try {
-                dump.encodeBuffer(bytes, System.out);
-            } catch (IOException e) {
-                // just for debugging, ignore this
-            }
-        }
-    }
-
-    /**
-     * Throw an SSLException with the specified message and cause.
-     * Shorthand until a new SSLException constructor is added.
-     * This method never returns.
-     */
-    static void throwSSLException(String msg, Throwable cause)
-            throws SSLException {
-        SSLException e = new SSLException(msg);
-        e.initCause(cause);
-        throw e;
-    }
-
-
-    /*
-     * Implement a simple task delegator.
-     *
-     * We are currently implementing this as a single delegator, may
-     * try for parallel tasks later.  Client Authentication could
-     * benefit from this, where ClientKeyExchange/CertificateVerify
-     * could be carried out in parallel.
-     */
-    class DelegatedTask<E> implements Runnable {
-
-        private PrivilegedExceptionAction<E> pea;
-
-        DelegatedTask(PrivilegedExceptionAction<E> pea) {
-            this.pea = pea;
-        }
-
-        public void run() {
-            synchronized (engine) {
-                try {
-                    AccessController.doPrivileged(pea, engine.getAcc());
-                } catch (PrivilegedActionException pae) {
-                    thrown = pae.getException();
-                } catch (RuntimeException rte) {
-                    thrown = rte;
-                }
-                delegatedTask = null;
-                taskDelegated = false;
-            }
-        }
-    }
-
-    private <T> void delegateTask(PrivilegedExceptionAction<T> pea) {
-        delegatedTask = new DelegatedTask<T>(pea);
+        delegatedTask = null;
         taskDelegated = false;
-        thrown = null;
+      }
     }
+  }
 
-    DelegatedTask getTask() {
-        if (!taskDelegated) {
-            taskDelegated = true;
-            return delegatedTask;
-        } else {
-            return null;
+  private <T> void delegateTask(PrivilegedExceptionAction<T> pea) {
+    delegatedTask = new DelegatedTask<T>(pea);
+    taskDelegated = false;
+    thrown = null;
+  }
+
+  DelegatedTask<?> getTask() {
+    if (!taskDelegated) {
+      taskDelegated = true;
+      return delegatedTask;
+    } else {
+      return null;
+    }
+  }
+
+  /*
+   * See if there are any tasks which need to be delegated
+   *
+   * Locked by SSLEngine.this.
+   */
+  boolean taskOutstanding() {
+    return (delegatedTask != null);
+  }
+
+  /*
+   * The previous caller failed for some reason, report back the
+   * Exception.  We won't worry about Error's.
+   *
+   * Locked by SSLEngine.this.
+   */
+  void checkThrown() throws SSLException {
+    synchronized (thrownLock) {
+      if (thrown != null) {
+
+        String msg = thrown.getMessage();
+
+        if (msg == null) {
+          msg = "Delegated task threw Exception/Error";
         }
-    }
-
-    /*
-     * See if there are any tasks which need to be delegated
-     *
-     * Locked by SSLEngine.this.
-     */
-    boolean taskOutstanding() {
-        return (delegatedTask != null);
-    }
-
-    /*
-     * The previous caller failed for some reason, report back the
-     * Exception.  We won't worry about Error's.
-     *
-     * Locked by SSLEngine.this.
-     */
-    void checkThrown() throws SSLException {
-        synchronized (thrownLock) {
-            if (thrown != null) {
-
-                String msg = thrown.getMessage();
-
-                if (msg == null) {
-                    msg = "Delegated task threw Exception/Error";
-                }
 
                 /*
                  * See what the underlying type of exception is.  We should
                  * throw the same thing.  Chain thrown to the new exception.
                  */
-                Exception e = thrown;
-                thrown = null;
+        Exception e = thrown;
+        thrown = null;
 
-                if (e instanceof RuntimeException) {
-                    throw (RuntimeException)
-                        new RuntimeException(msg).initCause(e);
-                } else if (e instanceof SSLHandshakeException) {
-                    throw (SSLHandshakeException)
-                        new SSLHandshakeException(msg).initCause(e);
-                } else if (e instanceof SSLKeyException) {
-                    throw (SSLKeyException)
-                        new SSLKeyException(msg).initCause(e);
-                } else if (e instanceof SSLPeerUnverifiedException) {
-                    throw (SSLPeerUnverifiedException)
-                        new SSLPeerUnverifiedException(msg).initCause(e);
-                } else if (e instanceof SSLProtocolException) {
-                    throw (SSLProtocolException)
-                        new SSLProtocolException(msg).initCause(e);
-                } else {
+        if (e instanceof RuntimeException) {
+          throw new RuntimeException(msg, e);
+        } else if (e instanceof SSLHandshakeException) {
+          throw (SSLHandshakeException)
+              new SSLHandshakeException(msg).initCause(e);
+        } else if (e instanceof SSLKeyException) {
+          throw (SSLKeyException)
+              new SSLKeyException(msg).initCause(e);
+        } else if (e instanceof SSLPeerUnverifiedException) {
+          throw (SSLPeerUnverifiedException)
+              new SSLPeerUnverifiedException(msg).initCause(e);
+        } else if (e instanceof SSLProtocolException) {
+          throw (SSLProtocolException)
+              new SSLProtocolException(msg).initCause(e);
+        } else {
                     /*
                      * If it's SSLException or any other Exception,
                      * we'll wrap it in an SSLException.
                      */
-                    throw (SSLException)
-                        new SSLException(msg).initCause(e);
-                }
-            }
+          throw new SSLException(msg, e);
         }
+      }
     }
+  }
 
-    // NPN_CHANGES_BEGIN
-    void sendNextProtocol(NextProtoNego.Provider provider) throws IOException
-    {
-    }
+  // NPN_CHANGES_BEGIN
+  void sendNextProtocol(NextProtoNego.Provider provider) throws IOException
+  {
+  }
 
-    Finished updateFinished(Finished message)
-    {
-        return message;
-    }
-    // NPN_CHANGES_END
+  Finished updateFinished(Finished message)
+  {
+    return message;
+  }
+  // NPN_CHANGES_END
 }
