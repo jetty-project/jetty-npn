@@ -731,6 +731,27 @@ final class ServerHandshaker extends Handshaker {
       // set the handshake session
       setHandshakeSessionSE(session);
 
+      // SNI Changes Begin
+      if (!sniMatchers.isEmpty() && clientHelloSNIExt != null) {
+        // When resuming a session, the server MUST NOT include a
+        // server_name extension in the server hello.
+        if (!resumingSession) {
+          List<SNIServerName> serverNamesAnswer = new ArrayList<>();
+          if (engine.getServerNameSelector() != null) {
+            serverNamesAnswer.addAll(engine.getServerNameSelector().getServerNamesFor(clientHelloSNIExt.getServerNames()));
+          }
+          ServerNameExtension serverHelloSNI = new ServerNameExtension(serverNamesAnswer);
+          SSLParameters params = engine.getSSLParameters();
+          params.setServerNames(serverNamesAnswer);
+          engine.setSSLParameters(params);
+          if (debug != null && Debug.isOn("handshake")) {
+            System.out.println("Server Names Selected :  " + engine.getSSLParameters().getServerNames());
+          }
+          m1.extensions.add(serverHelloSNI);
+        }
+      }
+      // SNI Changes End
+
       // choose cipher suite and corresponding private key
       chooseCipherSuite(mesg);
 
@@ -765,21 +786,6 @@ final class ServerHandshaker extends Handshaker {
           clientVerifyData, serverVerifyData);
       m1.extensions.add(serverHelloRI);
     }
-
-    // SNI Changes Begin
-    if (!sniMatchers.isEmpty() && clientHelloSNIExt != null) {
-      // When resuming a session, the server MUST NOT include a
-      // server_name extension in the server hello.
-      if (!resumingSession) {
-        List<SNIServerName> serverNamesAnswer = new ArrayList<>();
-        if (engine.getServerNameSelector() != null) {
-          serverNamesAnswer.addAll(engine.getServerNameSelector().getServerNamesFor(clientHelloSNIExt));
-        }
-        ServerNameExtension serverHelloSNI = new ServerNameExtension(serverNamesAnswer);
-        m1.extensions.add(serverHelloSNI);
-      }
-    }
-    // SNI Changes End
 
     if (debug != null && Debug.isOn("handshake")) {
       m1.print(System.out);
