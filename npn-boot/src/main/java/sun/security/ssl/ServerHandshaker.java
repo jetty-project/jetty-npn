@@ -766,14 +766,20 @@ final class ServerHandshaker extends Handshaker {
       m1.extensions.add(serverHelloRI);
     }
 
+    // SNI Changes Begin
     if (!sniMatchers.isEmpty() && clientHelloSNIExt != null) {
       // When resuming a session, the server MUST NOT include a
       // server_name extension in the server hello.
       if (!resumingSession) {
-        ServerNameExtension serverHelloSNI = new ServerNameExtension();
+        List<SNIServerName> serverNamesAnswer = new ArrayList<>();
+        if (engine.getServerNameSelector() != null) {
+          serverNamesAnswer.addAll(engine.getServerNameSelector().getServerNamesFor(clientHelloSNIExt));
+        }
+        ServerNameExtension serverHelloSNI = new ServerNameExtension(serverNamesAnswer);
         m1.extensions.add(serverHelloSNI);
       }
     }
+    // SNI Changes End
 
     if (debug != null && Debug.isOn("handshake")) {
       m1.print(System.out);

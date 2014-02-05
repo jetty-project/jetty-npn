@@ -334,6 +334,20 @@ final public class SSLEngineImpl extends SSLEngine {
    */
   private static final Debug debug = Debug.getInstance("ssl");
 
+  //SNI Change Begin
+  private ServerNameSelector serverNameSelector=null;
+
+  public ServerNameSelector getServerNameSelector() {
+    return serverNameSelector;
+  }
+
+  public void setServerNameSelector(ServerNameSelector serverNameSelector) {
+    this.serverNameSelector = serverNameSelector;
+  }
+
+  //SNI Change End
+
+
   //
   // Initialization/Constructors
   //
