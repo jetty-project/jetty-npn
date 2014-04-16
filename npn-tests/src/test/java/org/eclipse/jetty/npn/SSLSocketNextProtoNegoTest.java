@@ -38,6 +38,8 @@ public class SSLSocketNextProtoNegoTest
     @Test
     public void testSSLSocket() throws Exception
     {
+        NextProtoNego.debug = true;
+
         SSLContext context = SSLSupport.newSSLContext();
 
         final int readTimeout = 5000;

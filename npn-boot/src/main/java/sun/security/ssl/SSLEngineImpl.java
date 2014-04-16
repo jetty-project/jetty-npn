@@ -25,22 +25,18 @@
 
 package sun.security.ssl;
 
-import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.security.AccessControlContext;
-import java.security.AccessController;
-import java.security.AlgorithmConstraints;
-import java.security.GeneralSecurityException;
+import java.io.*;
+import java.nio.*;
+import java.nio.ReadOnlyBufferException;
+import java.util.LinkedList;
+import java.security.*;
+
 import javax.crypto.BadPaddingException;
-import javax.net.ssl.SSLEngine;
-import javax.net.ssl.SSLEngineResult;
-import javax.net.ssl.SSLEngineResult.HandshakeStatus;
-import javax.net.ssl.SSLEngineResult.Status;
-import javax.net.ssl.SSLException;
-import javax.net.ssl.SSLHandshakeException;
-import javax.net.ssl.SSLParameters;
-import javax.net.ssl.SSLProtocolException;
-import javax.net.ssl.SSLSession;
+
+import javax.net.ssl.*;
+import javax.net.ssl.SSLEngineResult.*;
+
+import com.sun.net.ssl.internal.ssl.X509ExtendedTrustManager;
 
 /**
  * Implementation of an non-blocking SSLEngine.

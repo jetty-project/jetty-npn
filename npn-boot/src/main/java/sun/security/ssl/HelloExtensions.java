@@ -27,13 +27,10 @@ package sun.security.ssl;
 
 import java.io.IOException;
 import java.io.PrintStream;
+import java.util.*;
+
 import java.security.spec.ECParameterSpec;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+
 import javax.net.ssl.SSLProtocolException;
 
 /**
