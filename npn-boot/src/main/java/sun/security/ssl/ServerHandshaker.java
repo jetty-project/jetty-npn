@@ -1745,7 +1745,15 @@ final class ServerHandshaker extends Handshaker {
             String protocol = message.getProtocol();
             if (NextProtoNego.debug)
                 System.err.println(new StringBuilder("[S] NPN selected '").append(protocol).append("' for ").append(conn != null ? conn : engine));
-            provider.protocolSelected(protocol);
+            try
+            {
+                provider.protocolSelected(protocol);
+            }
+            catch (Throwable t)
+            {
+                fatalSE(Alerts.alert_handshake_failure, "NPN selected protocol not acceptable", t);
+                return;
+            }
         }
     }
     // NPN_CHANGES_END

@@ -1413,13 +1413,18 @@ final class ClientHandshaker extends Handshaker {
             }
             else
             {
-                String protocol = ((NextProtoNego.ClientProvider)provider).selectProtocol(protocols);
-                if (NextProtoNego.debug)
-                    System.err.println(new StringBuilder("[C] NPN selected '").append(protocol).append("' for ").append(conn != null ? conn : engine));
-                if (protocol != null)
+                try
                 {
+                    String protocol = ((NextProtoNego.ClientProvider)provider).selectProtocol(protocols);
+                    if (NextProtoNego.debug)
+                        System.err.println(new StringBuilder("[C] NPN selected '").append(protocol).append("' for ").append(conn != null ? conn : engine));
                     new NextProtocolMessage(protocol).write(output);
                     output.flush();
+                }
+                catch(Throwable t)
+                {
+                    fatalSE(Alerts.alert_handshake_failure, "NPN protocol selection failure", t);
+                    return;
                 }
             }
         }
