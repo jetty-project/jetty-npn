@@ -19,7 +19,7 @@ package sun.security.ssl;
 
 import java.io.IOException;
 import java.io.PrintStream;
-import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 
 public class NextProtocolMessage extends HandshakeMessage
 {
@@ -31,7 +31,7 @@ public class NextProtocolMessage extends HandshakeMessage
 
     public NextProtocolMessage(String protocol)
     {
-        protocolBytes = protocol.getBytes(Charset.forName("UTF-8"));
+        protocolBytes = protocol == null ? new byte[0] : protocol.getBytes(StandardCharsets.UTF_8);
         paddingBytes = new byte[32 - ((1 + protocolBytes.length + 1) % 32)];
         this.protocol = protocol;
     }
@@ -40,9 +40,13 @@ public class NextProtocolMessage extends HandshakeMessage
     {
         protocolBytes = input.getBytes8();
         paddingBytes = input.getBytes8();
-        protocol = new String(protocolBytes, "UTF-8");
+        protocol = protocolBytes.length == 0 ? null : new String(protocolBytes, StandardCharsets.UTF_8);
     }
 
+    /**
+     * Get the {@code selected_protocol} 
+     * @return The {@code selected_protocol}. May be {@code null}.
+     */
     public String getProtocol()
     {
         return protocol;

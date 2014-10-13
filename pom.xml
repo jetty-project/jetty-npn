@@ -50,7 +50,7 @@
     </scm>
 
     <properties>
-        <npn-api-version>1.1.0.v20120525</npn-api-version>
+        <npn-api-version>1.1.1.v20141010</npn-api-version>
     </properties>
 
     <modules>

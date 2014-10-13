@@ -16,6 +16,7 @@
 
 package org.eclipse.jetty.npn;
 
+
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.ServerSocketChannel;
@@ -26,6 +27,7 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLEngineResult;
@@ -35,17 +37,12 @@ import org.junit.Test;
 
 public class SSLEngineNextProtoNegoTest
 {
-    @Test
-    public void testSSLEngine() throws Exception
-    {
-        NextProtoNego.debug = true;
-
+    private final void setupSSLEngineNPNSuccessfulHandshake(final NextProtoNego.ServerProvider serverProvider,
+            final NextProtoNego.ClientProvider clientProvider, AtomicReference<CountDownLatch> latch) throws Exception {
         final SSLContext context = SSLSupport.newSSLContext();
 
         final int readTimeout = 5000;
         final String data = "data";
-        final String protocolName = "test";
-        final AtomicReference<CountDownLatch> latch = new AtomicReference<>(new CountDownLatch(4));
         final ServerSocketChannel server = ServerSocketChannel.open();
         server.bind(new InetSocketAddress("localhost", 0));
         new Thread()
@@ -55,29 +52,9 @@ public class SSLEngineNextProtoNegoTest
             {
                 try
                 {
-                    SSLEngine sslEngine = context.createSSLEngine();
+                    final SSLEngine sslEngine = context.createSSLEngine();
                     sslEngine.setUseClientMode(false);
-                    NextProtoNego.put(sslEngine, new NextProtoNego.ServerProvider()
-                    {
-                        @Override
-                        public void unsupported()
-                        {
-                        }
-
-                        @Override
-                        public List<String> protocols()
-                        {
-                            latch.get().countDown();
-                            return Arrays.asList(protocolName);
-                        }
-
-                        @Override
-                        public void protocolSelected(String protocol)
-                        {
-                            Assert.assertEquals(protocolName, protocol);
-                            latch.get().countDown();
-                        }
-                    });
+                    NextProtoNego.put(sslEngine, serverProvider);
                     ByteBuffer encrypted = ByteBuffer.allocate(sslEngine.getSession().getPacketBufferSize());
                     ByteBuffer decrypted = ByteBuffer.allocate(sslEngine.getSession().getApplicationBufferSize());
 
@@ -263,6 +240,7 @@ public class SSLEngineNextProtoNegoTest
 //                    sslEngine.beginHandshake();
 
                     // Close
+                    NextProtoNego.remove(sslEngine);
                     encrypted.clear();
                     socket.read(encrypted);
                     encrypted.flip();
@@ -287,32 +265,9 @@ public class SSLEngineNextProtoNegoTest
             }
         }.start();
 
-        SSLEngine sslEngine = context.createSSLEngine();
+        final SSLEngine sslEngine = context.createSSLEngine();
         sslEngine.setUseClientMode(true);
-        NextProtoNego.put(sslEngine, new NextProtoNego.ClientProvider()
-        {
-            @Override
-            public boolean supports()
-            {
-                latch.get().countDown();
-                return true;
-            }
-
-            @Override
-            public void unsupported()
-            {
-            }
-
-            @Override
-            public String selectProtocol(List<String> protocols)
-            {
-                Assert.assertEquals(1, protocols.size());
-                String protocol = protocols.get(0);
-                Assert.assertEquals(protocolName, protocol);
-                latch.get().countDown();
-                return protocol;
-            }
-        });
+        NextProtoNego.put(sslEngine, clientProvider);
         ByteBuffer encrypted = ByteBuffer.allocate(sslEngine.getSession().getPacketBufferSize());
         ByteBuffer decrypted = ByteBuffer.allocate(sslEngine.getSession().getApplicationBufferSize());
 
@@ -499,6 +454,7 @@ public class SSLEngineNextProtoNegoTest
         Assert.assertEquals(data, Charset.forName("UTF-8").decode(decrypted).toString());
 
         // Close
+        NextProtoNego.remove(sslEngine);
         sslEngine.closeOutbound();
         Assert.assertSame(SSLEngineResult.HandshakeStatus.NEED_WRAP, sslEngine.getHandshakeStatus());
         encrypted.clear();
@@ -515,6 +471,491 @@ public class SSLEngineNextProtoNegoTest
         result = sslEngine.unwrap(encrypted, decrypted);
         Assert.assertSame(SSLEngineResult.Status.CLOSED, result.getStatus());
         Assert.assertSame(SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING, result.getHandshakeStatus());
+        client.close();
+
+        server.close();
+    
+    }
+
+    @Test
+    public void testSSLEngine() throws Exception
+    {
+        NextProtoNego.debug = true;
+        final String protocolName = "test";
+        final AtomicReference<CountDownLatch> latch = new AtomicReference<>(new CountDownLatch(4));
+        setupSSLEngineNPNSuccessfulHandshake(new NextProtoNego.ServerProvider()
+        {
+            @Override
+            public void unsupported()
+            {
+            }
+
+            @Override
+            public List<String> protocols()
+            {
+                latch.get().countDown();
+                return Arrays.asList(protocolName);
+            }
+
+            @Override
+            public void protocolSelected(String protocol)
+            {
+                Assert.assertEquals(protocolName, protocol);
+                latch.get().countDown();
+            }
+        }, new NextProtoNego.ClientProvider()
+        {
+            @Override
+            public boolean supports()
+            {
+                latch.get().countDown();
+                return true;
+            }
+
+            @Override
+            public void unsupported()
+            {
+            }
+
+            @Override
+            public String selectProtocol(List<String> protocols)
+            {
+                Assert.assertEquals(1, protocols.size());
+                String protocol = protocols.get(0);
+                Assert.assertEquals(protocolName, protocol);
+                latch.get().countDown();
+                return protocol;
+            }
+        }, latch);
+    }
+
+    @Test
+    public void testSSLEngineClientReturnsEmptySelectedProtocol() throws Exception
+    {
+        NextProtoNego.debug = true;
+        final AtomicReference<CountDownLatch> latch = new AtomicReference<>(new CountDownLatch(4));
+        
+        this.setupSSLEngineNPNSuccessfulHandshake(new NextProtoNego.ServerProvider()
+        {
+            @Override
+            public void unsupported()
+            {
+            }
+
+            @Override
+            public List<String> protocols()
+            {
+                latch.get().countDown();
+                return Arrays.asList("test");
+            }
+
+            @Override
+            public void protocolSelected(String protocol)
+            {
+                Assert.assertNull(protocol);
+                latch.get().countDown();
+            }
+        }, new NextProtoNego.ClientProvider()
+        {
+            @Override
+            public boolean supports()
+            {
+                latch.get().countDown();
+                return true;
+            }
+
+            @Override
+            public void unsupported()
+            {
+            }
+
+            @Override
+            public String selectProtocol(List<String> protocols)
+            {
+                latch.get().countDown();
+                return null;
+            }
+        }, latch);
+    }
+
+    @Test(expected = RuntimeException.class)
+    public void testSSLEngineNoCompatibleProtocolsClientHandshakeFailure() throws Exception
+    {
+        NextProtoNego.debug = true;
+
+        final SSLContext context = SSLSupport.newSSLContext();
+
+        final int readTimeout = 5000;
+        final String protocolName = "test";
+        final ServerSocketChannel server = ServerSocketChannel.open();
+        server.bind(new InetSocketAddress("localhost", 0));
+        new Thread()
+        {
+            @Override
+            public void run()
+            {
+                try
+                {
+                    final SSLEngine sslEngine = context.createSSLEngine();
+                    sslEngine.setUseClientMode(false);
+                    NextProtoNego.put(sslEngine, new NextProtoNego.ServerProvider()
+                    {
+                        @Override
+                        public void unsupported()
+                        {
+                        }
+
+                        @Override
+                        public List<String> protocols()
+                        {
+                            return Arrays.asList(protocolName);
+                        }
+
+                        @Override
+                        public void protocolSelected(String protocol)
+                        {
+                            Assert.assertEquals(protocolName, protocol);
+                        }
+                    });
+                    ByteBuffer encrypted = ByteBuffer.allocate(sslEngine.getSession().getPacketBufferSize());
+                    ByteBuffer decrypted = ByteBuffer.allocate(sslEngine.getSession().getApplicationBufferSize());
+
+                    SocketChannel socket = server.accept();
+                    socket.socket().setSoTimeout(readTimeout);
+
+                    sslEngine.beginHandshake();
+                    Assert.assertSame(SSLEngineResult.HandshakeStatus.NEED_UNWRAP, sslEngine.getHandshakeStatus());
+
+                    // Read ClientHello
+                    socket.read(encrypted);
+                    encrypted.flip();
+                    SSLEngineResult result = sslEngine.unwrap(encrypted, decrypted);
+                    Assert.assertSame(SSLEngineResult.Status.OK, result.getStatus());
+                    Assert.assertSame(SSLEngineResult.HandshakeStatus.NEED_TASK, result.getHandshakeStatus());
+                    sslEngine.getDelegatedTask().run();
+                    Assert.assertSame(SSLEngineResult.HandshakeStatus.NEED_WRAP, sslEngine.getHandshakeStatus());
+
+                    // Generate and write ServerHello
+                    encrypted.clear();
+                    result = sslEngine.wrap(decrypted, encrypted);
+                    Assert.assertSame(SSLEngineResult.Status.OK, result.getStatus());
+                    Assert.assertSame(SSLEngineResult.HandshakeStatus.NEED_UNWRAP, result.getHandshakeStatus());
+                    encrypted.flip();
+                    socket.write(encrypted);
+
+                    // Read up to Finished
+                    encrypted.clear();
+                    socket.read(encrypted);
+                    encrypted.flip();
+                    result = sslEngine.unwrap(encrypted, decrypted);
+                    Assert.assertSame(SSLEngineResult.Status.OK, result.getStatus());
+                    Assert.assertSame(SSLEngineResult.HandshakeStatus.NEED_TASK, result.getHandshakeStatus());
+                    sslEngine.getDelegatedTask().run();
+                    Assert.assertSame(SSLEngineResult.HandshakeStatus.NEED_UNWRAP, sslEngine.getHandshakeStatus());
+                    if (!encrypted.hasRemaining())
+                    {
+                        encrypted.clear();
+                        socket.read(encrypted);
+                        encrypted.flip();
+                    }
+                    result = sslEngine.unwrap(encrypted, decrypted);
+                    Assert.assertSame(SSLEngineResult.Status.OK, result.getStatus());
+                    Assert.assertSame(SSLEngineResult.HandshakeStatus.NEED_UNWRAP, result.getHandshakeStatus());
+                    if (!encrypted.hasRemaining())
+                    {
+                        encrypted.clear();
+                        socket.read(encrypted);
+                        encrypted.flip();
+                    }
+                    result = sslEngine.unwrap(encrypted, decrypted);
+                    Assert.assertSame(SSLEngineResult.Status.OK, result.getStatus());
+
+                    // With NPN in place, we need one more unwrap() call, that is
+                    // not needed with without NPN, for the NextProtocol message
+                    if (SSLEngineResult.HandshakeStatus.NEED_UNWRAP == result.getHandshakeStatus())
+                    {
+                        if (!encrypted.hasRemaining())
+                        {
+                            encrypted.clear();
+                            socket.read(encrypted);
+                            encrypted.flip();
+                        }
+                        result = sslEngine.unwrap(encrypted, decrypted);
+                        Assert.assertSame(SSLEngineResult.Status.OK, result.getStatus());
+                    }
+                    Assert.assertSame(SSLEngineResult.HandshakeStatus.NEED_WRAP, result.getHandshakeStatus());
+
+                    // Generate and write ChangeCipherSpec
+                    encrypted.clear();
+                    result = sslEngine.wrap(decrypted, encrypted);
+                    Assert.assertSame(SSLEngineResult.Status.OK, result.getStatus());
+                    Assert.assertSame(SSLEngineResult.HandshakeStatus.NEED_WRAP, result.getHandshakeStatus());
+                    encrypted.flip();
+                    socket.write(encrypted);
+                    // Generate and write Finished
+                    encrypted.clear();
+                    result = sslEngine.wrap(decrypted, encrypted);
+                    Assert.assertSame(SSLEngineResult.Status.OK, result.getStatus());
+                    Assert.assertSame(SSLEngineResult.HandshakeStatus.FINISHED, result.getHandshakeStatus());
+                    Assert.assertSame(SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING, sslEngine.getHandshakeStatus());
+                    encrypted.flip();
+                    socket.write(encrypted);
+
+                    // Close
+                    NextProtoNego.remove(sslEngine);
+                    socket.write(encrypted);
+                    socket.close();
+                }
+                catch (Exception x)
+                {
+                    x.printStackTrace();
+                }
+            }
+        }.start();
+
+        final SSLEngine sslEngine = context.createSSLEngine();
+        sslEngine.setUseClientMode(true);
+        NextProtoNego.put(sslEngine, new NextProtoNego.ClientProvider()
+        {
+            @Override
+            public boolean supports()
+            {
+                return true;
+            }
+
+            @Override
+            public void unsupported()
+            {
+            }
+
+            @Override
+            public String selectProtocol(List<String> protocols)
+            {
+                throw new RuntimeException("Client says nothing is good enough");
+            }
+        });
+        ByteBuffer encrypted = ByteBuffer.allocate(sslEngine.getSession().getPacketBufferSize());
+        ByteBuffer decrypted = ByteBuffer.allocate(sslEngine.getSession().getApplicationBufferSize());
+
+        SocketChannel client = SocketChannel.open(server.getLocalAddress());
+        client.socket().setSoTimeout(readTimeout);
+
+        sslEngine.beginHandshake();
+        Assert.assertSame(SSLEngineResult.HandshakeStatus.NEED_WRAP, sslEngine.getHandshakeStatus());
+
+        // Generate and write ClientHello
+        SSLEngineResult result = sslEngine.wrap(decrypted, encrypted);
+        Assert.assertSame(SSLEngineResult.Status.OK, result.getStatus());
+        Assert.assertSame(SSLEngineResult.HandshakeStatus.NEED_UNWRAP, result.getHandshakeStatus());
+        encrypted.flip();
+        client.write(encrypted);
+
+        // Read Server Hello
+        while (sslEngine.getHandshakeStatus() == SSLEngineResult.HandshakeStatus.NEED_UNWRAP)
+        {
+            encrypted.clear();
+            client.read(encrypted);
+            encrypted.flip();
+            result = sslEngine.unwrap(encrypted, decrypted);
+            Assert.assertSame(SSLEngineResult.Status.OK, result.getStatus());
+            if (result.getHandshakeStatus() == SSLEngineResult.HandshakeStatus.NEED_TASK)
+                sslEngine.getDelegatedTask().run();
+        }
+        Assert.assertSame(SSLEngineResult.HandshakeStatus.NEED_WRAP, sslEngine.getHandshakeStatus());
+
+        // Generate and write ClientKeyExchange
+        encrypted.clear();
+        result = sslEngine.wrap(decrypted, encrypted);
+
+        // Close
+        NextProtoNego.remove(sslEngine);
+        sslEngine.closeOutbound();
+        client.close();
+
+        server.close();
+    }
+
+    @Test(expected = RuntimeException.class)
+    public void testSSLEngineNoCompatibleProtocolsServerHandshakeFailure() throws Exception
+    {
+        NextProtoNego.debug = true;
+
+        final SSLContext context = SSLSupport.newSSLContext();
+
+        final int readTimeout = 5000;
+        final String protocolName = "test";
+        final AtomicReference<CountDownLatch> latch = new AtomicReference<>(new CountDownLatch(4));
+        final ServerSocketChannel server = ServerSocketChannel.open();
+        server.bind(new InetSocketAddress("localhost", 0));
+        new Thread()
+        {
+            @Override
+            public void run()
+            {
+                try
+                {
+                    final SSLEngine sslEngine = context.createSSLEngine();
+                    sslEngine.setUseClientMode(false);
+                    NextProtoNego.put(sslEngine, new NextProtoNego.ServerProvider()
+                    {
+                        @Override
+                        public void unsupported()
+                        {
+                        }
+
+                        @Override
+                        public List<String> protocols()
+                        {
+                            latch.get().countDown();
+                            return Arrays.asList(protocolName);
+                        }
+
+                        @Override
+                        public void protocolSelected(String protocol)
+                        {
+                            Assert.assertEquals(protocolName, protocol);
+                            latch.get().countDown();
+                        }
+                    });
+                    ByteBuffer encrypted = ByteBuffer.allocate(sslEngine.getSession().getPacketBufferSize());
+                    ByteBuffer decrypted = ByteBuffer.allocate(sslEngine.getSession().getApplicationBufferSize());
+
+                    SocketChannel socket = server.accept();
+                    socket.socket().setSoTimeout(readTimeout);
+
+                    sslEngine.beginHandshake();
+                    Assert.assertSame(SSLEngineResult.HandshakeStatus.NEED_UNWRAP, sslEngine.getHandshakeStatus());
+
+                    // Read ClientHello
+                    socket.read(encrypted);
+                    encrypted.flip();
+                    SSLEngineResult result = sslEngine.unwrap(encrypted, decrypted);
+                    Assert.assertSame(SSLEngineResult.Status.OK, result.getStatus());
+                    Assert.assertSame(SSLEngineResult.HandshakeStatus.NEED_TASK, result.getHandshakeStatus());
+                    sslEngine.getDelegatedTask().run();
+                    Assert.assertSame(SSLEngineResult.HandshakeStatus.NEED_WRAP, sslEngine.getHandshakeStatus());
+
+                    // Generate and write ServerHello
+                    encrypted.clear();
+                    result = sslEngine.wrap(decrypted, encrypted);
+                    Assert.assertSame(SSLEngineResult.Status.OK, result.getStatus());
+                    Assert.assertSame(SSLEngineResult.HandshakeStatus.NEED_UNWRAP, result.getHandshakeStatus());
+                    encrypted.flip();
+                    socket.write(encrypted);
+
+                    // Read up to Finished
+                    encrypted.clear();
+                    socket.read(encrypted);
+                    encrypted.flip();
+                    result = sslEngine.unwrap(encrypted, decrypted);
+                    Assert.assertSame(SSLEngineResult.Status.OK, result.getStatus());
+                    Assert.assertSame(SSLEngineResult.HandshakeStatus.NEED_TASK, result.getHandshakeStatus());
+                    sslEngine.getDelegatedTask().run();
+                    Assert.assertSame(SSLEngineResult.HandshakeStatus.NEED_UNWRAP, sslEngine.getHandshakeStatus());
+                    if (!encrypted.hasRemaining())
+                    {
+                        encrypted.clear();
+                        socket.read(encrypted);
+                        encrypted.flip();
+                    }
+                    result = sslEngine.unwrap(encrypted, decrypted);
+                    Assert.assertSame(SSLEngineResult.Status.OK, result.getStatus());
+                    Assert.assertSame(SSLEngineResult.HandshakeStatus.NEED_UNWRAP, result.getHandshakeStatus());
+                    if (!encrypted.hasRemaining())
+                    {
+                        encrypted.clear();
+                        socket.read(encrypted);
+                        encrypted.flip();
+                    }
+                    result = sslEngine.unwrap(encrypted, decrypted);
+                    Assert.assertSame(SSLEngineResult.Status.OK, result.getStatus());
+
+                    // With NPN in place, we need one more unwrap() call, that is
+                    // not needed with without NPN, for the NextProtocol message
+                    if (SSLEngineResult.HandshakeStatus.NEED_UNWRAP == result.getHandshakeStatus())
+                    {
+                        if (!encrypted.hasRemaining())
+                        {
+                            encrypted.clear();
+                            socket.read(encrypted);
+                            encrypted.flip();
+                        }
+                        result = sslEngine.unwrap(encrypted, decrypted);
+                        Assert.assertSame(SSLEngineResult.Status.OK, result.getStatus());
+                    }
+                    Assert.assertSame(SSLEngineResult.HandshakeStatus.NEED_WRAP, result.getHandshakeStatus());
+
+                    // Close
+                    NextProtoNego.remove(sslEngine);
+                    socket.close();
+                }
+                catch (Exception x)
+                {
+                    x.printStackTrace();
+                }
+            }
+        }.start();
+
+        final SSLEngine sslEngine = context.createSSLEngine();
+        sslEngine.setUseClientMode(true);
+        NextProtoNego.put(sslEngine, new NextProtoNego.ClientProvider()
+        {
+            @Override
+            public boolean supports()
+            {
+                latch.get().countDown();
+                return true;
+            }
+
+            @Override
+            public void unsupported()
+            {
+            }
+
+            @Override
+            public String selectProtocol(List<String> protocols)
+            {
+                Assert.assertEquals(1, protocols.size());
+                latch.get().countDown();
+                throw new RuntimeException("Server says nothing is good enough");
+            }
+        });
+        ByteBuffer encrypted = ByteBuffer.allocate(sslEngine.getSession().getPacketBufferSize());
+        ByteBuffer decrypted = ByteBuffer.allocate(sslEngine.getSession().getApplicationBufferSize());
+
+        SocketChannel client = SocketChannel.open(server.getLocalAddress());
+        client.socket().setSoTimeout(readTimeout);
+
+        sslEngine.beginHandshake();
+        Assert.assertSame(SSLEngineResult.HandshakeStatus.NEED_WRAP, sslEngine.getHandshakeStatus());
+
+        // Generate and write ClientHello
+        SSLEngineResult result = sslEngine.wrap(decrypted, encrypted);
+        Assert.assertSame(SSLEngineResult.Status.OK, result.getStatus());
+        Assert.assertSame(SSLEngineResult.HandshakeStatus.NEED_UNWRAP, result.getHandshakeStatus());
+        encrypted.flip();
+        client.write(encrypted);
+
+        // Read Server Hello
+        while (sslEngine.getHandshakeStatus() == SSLEngineResult.HandshakeStatus.NEED_UNWRAP)
+        {
+            encrypted.clear();
+            client.read(encrypted);
+            encrypted.flip();
+            result = sslEngine.unwrap(encrypted, decrypted);
+            Assert.assertSame(SSLEngineResult.Status.OK, result.getStatus());
+            if (result.getHandshakeStatus() == SSLEngineResult.HandshakeStatus.NEED_TASK)
+                sslEngine.getDelegatedTask().run();
+        }
+        Assert.assertSame(SSLEngineResult.HandshakeStatus.NEED_WRAP, sslEngine.getHandshakeStatus());
+
+        // Generate and write ClientKeyExchange
+        encrypted.clear();
+        result = sslEngine.wrap(decrypted, encrypted);
+
+        // Close
+        NextProtoNego.remove(sslEngine);
+        sslEngine.closeOutbound();
         client.close();
 
         server.close();
