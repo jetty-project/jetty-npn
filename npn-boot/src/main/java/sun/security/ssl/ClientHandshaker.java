@@ -630,6 +630,9 @@ final class ClientHandshaker extends Handshaker {
             // abbreviated initial handshake.
             if (isInitialHandshake) {
                 session.setAsSessionResumption(true);
+                // NPN_CHANGES_BEGIN
+                npnReceived(mesg);
+                // NPN_CHANGES_END
             }
             return;
         }
@@ -660,22 +663,27 @@ final class ClientHandshaker extends Handshaker {
 
         // NPN_CHANGES_BEGIN
         if (isInitialHandshake)
-        {
-            NextProtoNegoExtension extension = (NextProtoNegoExtension)mesg.extensions.get(ExtensionType.EXT_NEXT_PROTOCOL_NEGOTIATION);
-            if (extension != null)
-            {
-                protocols = extension.getProtocols();
-                if (NextProtoNego.debug)
-                    System.err.println(new StringBuilder("[C] NPN protocols ").append(protocols).append(" received from server for ").append(conn != null ? conn : engine));
-            }
-            else
-            {
-                if (NextProtoNego.debug)
-                    System.err.println(new StringBuilder("[C] NPN protocols not sent by server for ").append(conn != null ? conn : engine));
-            }
-        }
+            npnReceived(mesg);
         // NPN_CHANGES_END
     }
+
+    // NPN_CHANGES_BEGIN
+    private void npnReceived(ServerHello mesg) throws IOException
+    {
+        NextProtoNegoExtension extension = (NextProtoNegoExtension)mesg.extensions.get(ExtensionType.EXT_NEXT_PROTOCOL_NEGOTIATION);
+        if (extension != null)
+        {
+            protocols = extension.getProtocols();
+            if (NextProtoNego.debug)
+                System.err.println(new StringBuilder("[C] NPN protocols ").append(protocols).append(" received from server for ").append(conn != null ? conn : engine));
+        }
+        else
+        {
+            if (NextProtoNego.debug)
+                System.err.println(new StringBuilder("[C] NPN protocols not sent by server for ").append(conn != null ? conn : engine));
+        }
+    }
+    // NPN_CHANGES_END
 
     /*
      * Server's own key was either a signing-only key, or was too
