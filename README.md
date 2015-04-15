@@ -2,6 +2,8 @@
 
 This project implements the [Next Protocol Negotiation (NPN)
 Specification](http://technotes.googlecode.com/git/nextprotoneg.html)
-for OpenJDK 7 and greater.
+for OpenJDK 7.
 
-Documentation at http://wiki.eclipse.org/Jetty/Feature/NPN
+[Documentation](https://www.eclipse.org/jetty/documentation/current/npn-chapter.html)
+
+NPN is now deprecated in favour of [ALPN](https://github.com/jetty-project/jetty-alpn).
